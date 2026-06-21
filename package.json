@@ -1,0 +1,25 @@
+{
+  "name": "sat-hunt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "inspect": "node scripts/inspect-assets.js",
+    "decimate": "node scripts/decimate-assets.js"
+  },
+  "devDependencies": {
+    "@gltf-transform/core": "^4.3.0",
+    "@gltf-transform/extensions": "^4.3.0",
+    "@gltf-transform/functions": "^4.3.0",
+    "@vitejs/plugin-basic-ssl": "^2.1.0",
+    "draco3dgltf": "^1.5.7",
+    "meshoptimizer": "^0.22.0",
+    "vite": "^6.0.0"
+  },
+  "dependencies": {
+    "three": "^0.169.0"
+  }
+}

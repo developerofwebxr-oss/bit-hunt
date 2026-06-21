@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover for safe-area insets; lock zoom so rapid taps don't fire browser gestures (Android) -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <title>Sat-Hunt — Vault</title>
+    <style>
+      :root {
+        --green: #19ff9b;
+        --green-dim: #0c7a4a;
+        --panel: rgba(6, 18, 12, 0.72);
+        --stroke: rgba(25, 255, 155, 0.35);
+        --text: #cffce6;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #04080a;
+        overflow: hidden;
+        /* touch-action is what actually fixes iOS rapid-tap zoom */
+        touch-action: manipulation;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        color: var(--text);
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #app { position: fixed; inset: 0; }
+      canvas { display: block; touch-action: manipulation; }
+
+      /* ---------- HUD: CSS overlay, zero Three.js cost, anchored to viewport ---------- */
+      #hud {
+        position: fixed;
+        inset: 0;
+        height: 100dvh;
+        pointer-events: none; /* clicks fall through to canvas; re-enable per-control */
+        z-index: 10;
+      }
+
+      /* Crosshair */
+      #crosshair {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 22px;
+        height: 22px;
+        margin: -11px 0 0 -11px;
+        opacity: 0.6;
+      }
+      #crosshair::before, #crosshair::after {
+        content: "";
+        position: absolute;
+        background: var(--green);
+        box-shadow: 0 0 6px var(--green);
+      }
+      #crosshair::before { left: 50%; top: 0; width: 2px; height: 100%; margin-left: -1px; }
+      #crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; margin-top: -1px; }
+
+      /* Top-left status badge */
+      #badge {
+        position: absolute;
+        top: calc(12px + env(safe-area-inset-top));
+        left: calc(12px + env(safe-area-inset-left));
+        padding: 8px 12px;
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        border-radius: 10px;
+        font-size: 12px;
+        line-height: 1.5;
+        backdrop-filter: blur(6px);
+        text-shadow: 0 0 8px rgba(25, 255, 155, 0.4);
+      }
+      #badge b { color: var(--green); }
+
+      /* Bottom control bar (mode switcher + free-look) */
+      #controls {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: calc(14px + env(safe-area-inset-bottom));
+        display: flex;
+        gap: 8px;
+        pointer-events: auto;
+        flex-wrap: wrap;
+        justify-content: center;
+        max-width: calc(100vw - 24px);
+      }
+      button.ctl {
+        pointer-events: auto;
+        font: inherit;
+        font-size: 13px;
+        color: var(--text);
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        border-radius: 10px;
+        padding: 10px 14px;
+        cursor: pointer;
+        backdrop-filter: blur(6px);
+        transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+      }
+      button.ctl:hover { border-color: var(--green); }
+      button.ctl.active { background: var(--green-dim); border-color: var(--green); color: #eafff5; }
+      button.ctl[disabled] { opacity: 0.35; cursor: not-allowed; }
+
+      /* Transient controls hint (top-center, fades) */
+      #hint {
+        position: absolute;
+        top: calc(14px + env(safe-area-inset-top));
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 7px 12px;
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        border-radius: 999px;
+        font-size: 12px;
+        opacity: 0;
+        transition: opacity 0.4s;
+        white-space: nowrap;
+      }
+      #hint.show { opacity: 0.9; }
+
+      /* ESC-to-exit hint while pointer-locked */
+      #esc-hint {
+        position: absolute;
+        bottom: calc(70px + env(safe-area-inset-bottom));
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 6px 12px;
+        background: var(--panel);
+        border: 1px solid var(--stroke);
+        border-radius: 999px;
+        font-size: 12px;
+        display: none;
+      }
+      #esc-hint.show { display: block; }
+
+      /* Hide flat-mode HUD bits while in an immersive session */
+      body.xr-active #crosshair,
+      body.xr-active #controls,
+      body.xr-active #hint,
+      body.xr-active #esc-hint { display: none; }
+
+      .tip { position: relative; }
+      .tip[data-tip]:hover::after {
+        content: attr(data-tip);
+        position: absolute;
+        bottom: 120%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #03110a;
+        border: 1px solid var(--stroke);
+        color: var(--text);
+        font-size: 11px;
+        padding: 5px 8px;
+        border-radius: 6px;
+        white-space: nowrap;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+
+    <div id="hud">
+      <div id="badge">
+        <div>SAT-HUNT · <b id="mode-label">Screen</b></div>
+        <div id="status">loading assets…</div>
+      </div>
+
+      <div id="crosshair"></div>
+      <div id="hint">hold-drag to look</div>
+      <div id="esc-hint">press <b>ESC</b> to release look</div>
+
+      <div id="controls">
+        <button class="ctl tip" id="btn-screen">Screen</button>
+        <button class="ctl tip" id="btn-vr">Enter VR</button>
+        <button class="ctl tip" id="btn-ar">Enter AR</button>
+        <button class="ctl tip" id="btn-freelook" data-tip="Hands-free look (Esc to release)">Free look: off</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
