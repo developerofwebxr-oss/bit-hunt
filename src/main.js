@@ -1,4 +1,4 @@
-// Sat-Hunt — Prompt 1: scene assembly + multi-device viewing.
+// Bit-Hunt — Prompt 1: scene assembly + multi-device viewing.
 // Rig holds the camera. Eye height lives on the CAMERA in flat mode only; in
 // XR the headset supplies head pose relative to local-floor, so the rig stays
 // at floor level (no double-counting).

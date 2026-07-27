@@ -1,7 +1,7 @@
 // Comfort settings — ALL OFF by default (per the webxr-threejs Controller &
 // Input Standard: "don't nanny"). Opt-in via the X pause menu, persisted to
 // localStorage. Movement speeds are FIXED, not a toggle.
-const KEY = 'sat-hunt.comfort.v1';
+const KEY = 'bit-hunt.comfort.v1';
 
 const DEFAULTS = {
   vignette: false, // tunnel-vignette while moving/flying

@@ -1,9 +1,9 @@
-# Sat-Hunt — state brief (2026-07-23)
+# Bit-Hunt — state brief (2026-07-23)
 
 **What this is:** A browser-based WebXR "vault hunt" (Vite + Three.js + WebXR, plain JS, no backend yet). A green industrial vault room you explore on desktop, mobile, Quest VR and AR passthrough from a single link. The hunt itself (21 hidden sats, scanner, vault burst) is NOT built yet — this is the room, the viewing layer, and the locomotion/input layer. See `README.md` for build/run details.
 
 **Live URLs / deploys:**
-- **LIVE:** https://developerofwebxr-oss.github.io/sat-hunt/ — repo `developerofwebxr-oss/sat-hunt` (public), deploys on push to `main` via GitHub Actions → Pages (`.github/workflows/deploy.yml`, repo-guarded). Vite base comes from `BASE_PATH=/sat-hunt/` set in the workflow.
+- **LIVE:** https://developerofwebxr-oss.github.io/bit-hunt/ — repo `developerofwebxr-oss/bit-hunt` (public), deploys on push to `main` via GitHub Actions → Pages (`.github/workflows/deploy.yml`, repo-guarded). Vite base comes from `BASE_PATH=/bit-hunt/` set in the workflow.
 - No backend, no Railway service, no payments yet. (Sats Arena's Railway backend is a *separate* project — not used here.)
 - Local dev: `npm run dev` (HTTPS via basic-ssl, needed for LAN/Quest). `HTTP_PREVIEW=1 npx vite` serves plain HTTP for headless browser checks.
 
@@ -20,7 +20,7 @@ Broken / whacky / honest:
 - No TODO/FIXME markers in the codebase.
 
 **Changed this session:**
-- Stood up the project from scratch and **published + deployed it** (new repo, Actions→Pages, all assets/Draco resolving under `/sat-hunt/`, verified live in real Chrome).
+- Stood up the project from scratch and **published + deployed it** (new repo, Actions→Pages, all assets/Draco resolving under `/bit-hunt/`, verified live in real Chrome).
 - Decimated all 10 assets 375k → ~9–38k tris each and kept pristine originals in `assets-src/raw/` (outside `public/`, so they never ship).
 - Auto-measured the vault hole and fitted the door to it; fixed a bug where the door rendered at 16 m (nested world-scale double-multiply).
 - Added the full locomotion/input layer: `input.js`, `locomotion.js`, `collision.js`, `environment.js` (AR shell-off), `interaction.js`, `pausemenu.js`, `comfort.js`, `haptics.js`, `vignette.js` — **uncommitted**.
@@ -40,4 +40,4 @@ Broken / whacky / honest:
 - Remesh before or after gameplay? Current ~487k tris is fine on desktop, risky on Quest.
 - Payments/Lightning are entirely unstarted — no backend or wallet chosen for this project yet.
 
-**Infra notes:** GitHub repo `developerofwebxr-oss/sat-hunt` (public), GitHub Pages via GitHub Actions (Pages source = GitHub Actions). No Railway service, no wallet, no secrets of any kind in this repo.
+**Infra notes:** GitHub repo `developerofwebxr-oss/bit-hunt` (public), GitHub Pages via GitHub Actions (Pages source = GitHub Actions). No Railway service, no wallet, no secrets of any kind in this repo.

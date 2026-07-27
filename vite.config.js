@@ -10,7 +10,7 @@ import basicSsl from '@vitejs/plugin-basic-ssl';
 const httpPreview = process.env.HTTP_PREVIEW === '1';
 
 // GitHub Pages serves a project repo from /<repo>/. The deploy workflow sets
-// BASE_PATH="/sat-hunt/"; local dev defaults to "/". All asset/Draco URLs are
+// BASE_PATH="/bit-hunt/"; local dev defaults to "/". All asset/Draco URLs are
 // built from import.meta.env.BASE_URL, so they follow this automatically.
 const base = process.env.BASE_PATH || '/';
 

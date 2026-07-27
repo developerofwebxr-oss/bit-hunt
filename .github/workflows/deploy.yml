@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'developerofwebxr-oss/sat-hunt'
+    if: github.repository == 'developerofwebxr-oss/bit-hunt'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +30,7 @@ jobs:
       - run: npm ci
       - run: npm run build # base set to the Pages subpath via BASE_PATH
         env:
-          BASE_PATH: "/sat-hunt/"
+          BASE_PATH: "/bit-hunt/"
 
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -38,7 +38,7 @@ jobs:
 
   deploy:
     needs: build
-    if: github.repository == 'developerofwebxr-oss/sat-hunt'
+    if: github.repository == 'developerofwebxr-oss/bit-hunt'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
