@@ -19,6 +19,7 @@ export function createControls({ rig, camera, canvas }) {
   // ---- hold-drag look ----
   const onDown = (e) => {
     if (!enabled || pointerLocked) return;
+    if (e.button !== undefined && e.button !== 0) return; // left-drag only (right = grab)
     dragging = true;
     lastX = e.clientX; lastY = e.clientY;
     onFirstInput();

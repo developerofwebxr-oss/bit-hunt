@@ -6,9 +6,17 @@ import * as THREE from 'three';
 import { buildRoom, ROOM } from './room.js';
 import { buildLayout } from './layout.js';
 import { buildVault } from './vault.js';
-import { createControls } from './controls.js';
+import { createControls, isCoarsePointer } from './controls.js';
 import { createModeSwitcher } from './modeswitcher.js';
 import { createPostFX } from './postfx.js';
+import { createInput } from './input.js';
+import { createCollision } from './collision.js';
+import { createLocomotion } from './locomotion.js';
+import { createInteraction } from './interaction.js';
+import { createEnvironment } from './environment.js';
+import { createPauseMenu } from './pausemenu.js';
+import { createVignette } from './vignette.js';
+import { comfort } from './comfort.js';
 
 const EYE_HEIGHT = 1.6;
 const app = document.getElementById('app');
@@ -20,6 +28,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.xr.enabled = true;
 app.appendChild(renderer.domElement);
 const canvas = renderer.domElement;
+if (isCoarsePointer()) document.body.classList.add('mobile'); // show joystick/jump
 
 // ---- scene + atmosphere ----
 const scene = new THREE.Scene();
@@ -32,7 +41,8 @@ rig.name = 'rig';
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 200);
 camera.position.set(0, EYE_HEIGHT, 0);
 rig.add(camera);
-rig.position.set(0, 0, 3.5); // start near room centre, looking toward the vault (-Z)
+rig.position.set(0, 0, 5.0); // spawn in the clear centre aisle, facing the vault (-Z)
+                              // (clear of the mining rig at (1.0, 3.6))
 scene.add(rig);
 
 // ---- lights (few; emissive + bloom do the work) ----
@@ -45,13 +55,27 @@ scene.add(dir);
 // ---- post-processing (flat mode) ----
 const postfx = createPostFX({ renderer, scene, camera });
 
-// ---- controls + mode switcher ----
+// ---- input + locomotion + interaction systems ----
+const collision = createCollision();
 const controls = createControls({ rig, camera, canvas });
+const input = createInput({ renderer, canvas });
+const locomotion = createLocomotion({ rig, camera, input, collision, renderer });
+const vignette = createVignette({ camera });
+let pauseMenu = null; // set after modeswitcher (needs its exit path)
+const interaction = createInteraction({
+  renderer, scene, camera, input, canvas, isPaused: () => !!pauseMenu?.isOpen(),
+});
+interaction.setFireHook((hand) => console.log(`[fire] trigger (${hand}) — placeholder, no gun yet`));
+
+let environment = null;
+let currentMode = 'Screen';
 const modeswitcher = createModeSwitcher({
   renderer,
   onModeChange: (mode) => {
+    currentMode = mode;
     const inXR = mode === 'VR' || mode === 'AR';
     controls.setEnabled(!inXR);
+    pauseMenu?.close();
     if (inXR) {
       camera.position.y = 0;                       // headset supplies eye height
       renderer.toneMapping = THREE.ACESFilmicToneMapping; // direct render in XR
@@ -62,8 +86,15 @@ const modeswitcher = createModeSwitcher({
       renderer.toneMapping = THREE.NoToneMapping;  // composer/OutputPass handles it
       scene.background = new THREE.Color(0x05100b);
     }
+    environment?.applyMode(mode);                  // AR shell-off + collision bounds
   },
 });
+pauseMenu = createPauseMenu({
+  input, camera, renderer, interaction,
+  onExit: () => modeswitcher.exitToScreen(),       // X menu "Exit to screen mode"
+});
+// on-screen menu button (flat/mobile) → same as Left-X
+document.getElementById('btn-pause')?.addEventListener('click', () => pauseMenu.toggle());
 
 // ---- build the world ----
 let vaultApi = null;
@@ -73,8 +104,19 @@ Promise.all([
   buildLayout(scene),
   buildVault(scene, new THREE.Vector3(0, 0, -5.5)),
 ])
-  .then(([, , v]) => {
+  .then(([room, layout, v]) => {
     vaultApi = v;
+    // register colliders (single source of truth from layout + vault)
+    for (const b of layout.colliders) collision.addBox(b);
+    for (const s of layout.surfaces) collision.addSurface(s);
+    collision.setRamp(layout.ramp);
+    if (v.collider) collision.addBox(v.collider);
+    // the coin is a grabbable target demo for builder mode
+    const coin = scene.getObjectByName('sat-coin');
+    if (coin) interaction.addTarget(coin, () => console.log('[select] sat coin'), { grabbable: true });
+    // environment adapter owns the shell; apply the current mode now
+    environment = createEnvironment({ shell: room.group, collision, half: ROOM.size / 2 });
+    environment.applyMode(currentMode);
     modeswitcher.setStatus('ready · flat mode');
     reportStats();
   })
@@ -108,8 +150,16 @@ resize();
 // ---- render loop ----
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
-  const dt = clock.getDelta();
-  if (!modeswitcher.isInSession()) controls.update();
+  const dt = Math.min(clock.getDelta(), 0.05); // clamp to avoid huge post-tab-switch steps
+  input.update();
+  pauseMenu?.update();
+  const paused = !!pauseMenu?.isOpen();
+  if (!paused) {
+    if (!modeswitcher.isInSession()) controls.update(); // flat mouse-look (turn)
+    locomotion.update(dt);                               // move / turn / jump / fly
+  }
+  interaction.update();                                  // lasers, select, grip, B/Y
+  vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
   vaultApi?.updateVault(dt);
   if (renderer.xr.isPresenting) {
     renderer.render(scene, camera); // XR: direct path, no post
@@ -121,7 +171,18 @@ renderer.setAnimationLoop(() => {
 // ---- expose for headless verification ----
 window.__sat = {
   scene, rig, camera, renderer, controls, THREE,
+  input, locomotion, collision, comfort, interaction,
   get vault() { return vaultApi; },
+  get pauseMenu() { return pauseMenu; },
+  // drive one logic frame manually (for headless verification when the tab is
+  // backgrounded and rAF is throttled). Mirrors the render loop's update order.
+  step(dt = 0.016) {
+    input.update();
+    pauseMenu?.update();
+    const paused = !!pauseMenu?.isOpen();
+    if (!paused) { if (!modeswitcher.isInSession()) controls.update(); locomotion.update(dt); }
+    interaction.update();
+  },
   // place the camera for a screenshot: eye -> target (world coords)
   view(ex, ey, ez, tx, ty, tz) {
     controls.setEnabled(false);
