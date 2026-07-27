@@ -1,4 +1,4 @@
-# Sat-Hunt — Vault scene (Prompt 1: assembly + multi-device viewing)
+# Bit-Hunt — Vault scene (Prompt 1: assembly + multi-device viewing)
 
 A WebXR / Three.js vault room that opens from a single link and can be viewed on
 desktop, mobile, VR (Quest) and AR (passthrough). This first milestone covers

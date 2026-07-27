@@ -124,28 +124,28 @@ export async function buildLayout(scene) {
   group.add(stair);
 
   // ---- Scattered props (hiding spots) ----
-  const rigs = instanced('mining-rigs', bake(A.miningRig.obj), [
+  const rigT = [
     { x: -2.4, z: 2.6, ry: 0.4 },
     { x: 3.2, z: -2.0, ry: -0.8 },
     { x: 1.0, z: 3.6, ry: 2.6 },
-  ]);
-  group.add(rigs);
+  ];
+  group.add(instanced('mining-rigs', bake(A.miningRig.obj), rigT));
 
-  const crates = instanced('crates', bake(A.crate.obj), [
+  const crateT = [
     { x: -3.6, z: -1.2, ry: 0.2 },
     { x: 2.2, z: 1.4, ry: 1.1 },
     { x: -1.0, z: -3.4, ry: -0.5 },
     { x: 4.0, z: 3.2, ry: 0.9 },
     { x: half - 1.0, y: cy, z: -1.5, ry: 0.3 }, // one up on the east catwalk
-  ]);
-  group.add(crates);
+  ];
+  group.add(instanced('crates', bake(A.crate.obj), crateT));
 
-  const terms = instanced('terminals', bake(A.terminal.obj), [
+  const termT = [
     { x: -4.2, z: 4.0, ry: 0.7 },
     { x: 4.4, z: -3.6, ry: -1.2 },
     { x: -3.0, z: -4.0, ry: 2.2 },
-  ]);
-  group.add(terms);
+  ];
+  group.add(instanced('terminals', bake(A.terminal.obj), termT));
 
   // ---- One sat coin as a scale/look check (standing, near centre) ----
   const coin = A.coin.obj;
@@ -153,6 +153,31 @@ export async function buildLayout(scene) {
   coin.name = 'sat-coin';
   group.add(coin);
 
+  // ---- Collision data (single source of truth with the placements above) ----
+  // Boxes are XZ AABBs with a vertical [minY,maxY] span; half-extents are the
+  // collidable core (a touch tighter than the visual mesh so you don't bump air).
+  const box = (x, z, half, top, base = 0) =>
+    ({ minX: x - half, maxX: x + half, minZ: z - half, maxZ: z + half, minY: base, maxY: top });
+
+  const colliders = [];
+  for (const [x, z] of pPos) colliders.push(box(x, z, 0.6, pillarH));      // pillars
+  for (const t of rigT) colliders.push(box(t.x, t.z, 0.9, 2.0));            // mining rigs
+  for (const t of crateT) colliders.push(box(t.x, t.z, 0.55, (t.y || 0) + 1.0, t.y || 0)); // crates
+  for (const t of termT) colliders.push(box(t.x, t.z, 0.4, 1.2));          // terminals
+
+  // Catwalk walkable surfaces (west + east runs), y = catwalk level.
+  const surfaces = [
+    { minX: -half + 0.3, maxX: -half + 1.7, minZ: -catLen * 1.5, maxZ: catLen * 1.5, y: cy }, // west
+    { minX: half - 1.7, maxX: half - 0.3, minZ: -catLen * 1.5, maxZ: catLen * 1.5, y: cy },   // east
+  ];
+
+  // Staircase ramp up to the WEST catwalk (run along X toward the wall; base at
+  // the interior/high-X end). Tune here if the climb feels off.
+  const ramp = {
+    minX: -half + 1.4, maxX: -half + 5.4, minZ: 2.2, maxZ: 5.8,
+    axis: 'x', lowY: 0, highY: cy, lowAt: 'hi',
+  };
+
   scene.add(group);
-  return { group };
+  return { group, colliders, surfaces, ramp };
 }

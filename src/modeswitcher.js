@@ -66,9 +66,14 @@ export function createModeSwitcher({ renderer, onModeChange } = {}) {
     setStatus('flat mode');
   }
 
-  btnScreen.addEventListener('click', () => {
+  // Exit path used by the X pause menu's "Exit to screen mode" AND the Screen
+  // button. (No controller X/A exit bindings — exit is the platform button +
+  // this menu action, per the Controller & Input Standard.)
+  function exitToScreen() {
     if (currentSession) currentSession.end(); else setMode('Screen');
-  });
+  }
+
+  btnScreen.addEventListener('click', exitToScreen);
   btnVR.addEventListener('click', () => {
     if (btnVR.disabled) return;
     if (currentSession) currentSession.end(); else enter('immersive-vr');
@@ -82,5 +87,5 @@ export function createModeSwitcher({ renderer, onModeChange } = {}) {
   renderer.xr.addEventListener('sessionend', () => { if (!currentSession) onSessionEnd(); });
 
   setMode('Screen');
-  return { detect, setStatus, isInSession: () => !!currentSession };
+  return { detect, setStatus, exitToScreen, isInSession: () => !!currentSession };
 }

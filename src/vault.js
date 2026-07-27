@@ -126,5 +126,13 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
     hinge.rotation.y = state.current * HINGE_OPEN_ANGLE;
   }
 
-  return { vault, door: doorInner, hinge, hole, size: vsize, openVault, closeVault, updateVault };
+  // ---- collider (vault body AABB in world XZ, base at floor) ----
+  // vbox was measured on the vault body before the door was parented in.
+  const collider = {
+    minX: vbox.min.x, maxX: vbox.max.x,
+    minZ: vbox.min.z, maxZ: vbox.max.z,
+    minY: 0, maxY: vbox.max.y,
+  };
+
+  return { vault, door: doorInner, hinge, hole, size: vsize, collider, openVault, closeVault, updateVault };
 }
