@@ -1,112 +1,143 @@
-// Diagnostic: compute REAL world AABBs by replicating assets.js normalize +
-// layout.js placement on the actual decimated GLBs. No browser needed.
-import { NodeIO, getBounds } from '@gltf-transform/core';
+// Deterministic geometry verification by RAYCASTING the real decoded meshes
+// (never bounding boxes). Replicates layout.js placement, then measures the
+// walkable deck surface, the staircase top tread, ascent direction, and ramp.
+// Run: node scripts/diag-geometry.mjs
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import draco3d from 'draco3dgltf';
 
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS)
   .registerDependencies({ 'draco3d.decoder': await draco3d.createDecoderModule() });
 const DIR = 'public/assets/';
-const f2 = (n) => (Math.round(n * 100) / 100).toFixed(2);
-const box2 = (b) => `x[${f2(b.min[0])}, ${f2(b.max[0])}]  y[${f2(b.min[1])}, ${f2(b.max[1])}]  z[${f2(b.min[2])}, ${f2(b.max[2])}]`;
+const f2 = (n) => (n == null ? 'null' : (Math.round(n * 100) / 100).toFixed(2));
 
-async function rawBox(file) {
+// ---- load a GLB as a single three.BufferGeometry in the asset's scene space ----
+async function loadGeom(file) {
   const doc = await io.read(DIR + file);
   const scene = doc.getRoot().getDefaultScene() || doc.getRoot().listScenes()[0];
-  const b = getBounds(scene);
-  return { min: b.min, max: b.max, dim: [b.max[0]-b.min[0], b.max[1]-b.min[1], b.max[2]-b.min[2]] };
+  const geoms = [];
+  const walk = (node, parent) => {
+    const t = node.getTranslation(), r = node.getRotation(), s = node.getScale();
+    const local = new THREE.Matrix4().compose(
+      new THREE.Vector3(t[0], t[1], t[2]),
+      new THREE.Quaternion(r[0], r[1], r[2], r[3]),
+      new THREE.Vector3(s[0], s[1], s[2]));
+    const world = parent.clone().multiply(local);
+    const mesh = node.getMesh();
+    if (mesh) for (const prim of mesh.listPrimitives()) {
+      const pos = prim.getAttribute('POSITION'); if (!pos) continue;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(Float32Array.from(pos.getArray()), 3));
+      const idx = prim.getIndices();
+      if (idx) g.setIndex(new THREE.BufferAttribute(Uint32Array.from(idx.getArray()), 1));
+      g.applyMatrix4(world);
+      geoms.push(g);
+    }
+    node.listChildren().forEach((c) => walk(c, world));
+  };
+  scene.listChildren().forEach((n) => walk(n, new THREE.Matrix4()));
+  return geoms.length === 1 ? geoms[0] : mergeGeometries(geoms, false);
 }
-// normalize(): uniform scale to fit `size` on `fit` axis, recenter XZ, base->0
-function normLocal(raw, fit, size) {
-  const s = size / raw.dim[{x:0,y:1,z:2}[fit]];
-  const sx = raw.dim[0]*s, sy = raw.dim[1]*s, sz = raw.dim[2]*s;
-  return { s, min: [-sx/2, 0, -sz/2], max: [sx/2, sy, sz/2] };
+const meshOf = (geom) => new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+function surfaceY(mesh, x, z, from = 40) {
+  mesh.updateMatrixWorld(true);
+  const rc = new THREE.Raycaster(new THREE.Vector3(x, from, z), new THREE.Vector3(0, -1, 0));
+  const h = rc.intersectObject(mesh, true);
+  return h.length ? h[0].point.y : null;
 }
-const aabb = (cs) => {
-  const mn = [1e9,1e9,1e9], mx = [-1e9,-1e9,-1e9];
-  for (const c of cs) for (let i=0;i<3;i++){ mn[i]=Math.min(mn[i],c[i]); mx[i]=Math.max(mx[i],c[i]); }
-  return { min: mn, max: mx };
+const bbox = (geom) => { geom.computeBoundingBox(); return geom.boundingBox; };
+const dimOf = (b) => new THREE.Vector3(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z);
+
+const half = 7;
+
+// ================= CATWALK: ground it, raycast the real deck =================
+const catRaw = await loadGeom('catwalk-section.glb');
+{ // normalize like assets.js (fit z=4 uniform, recenter XZ + base y=0)
+  let b = bbox(catRaw); const d = dimOf(b); const s = 4 / d.z;
+  catRaw.applyMatrix4(new THREE.Matrix4().makeScale(s, s, s));
+  b = bbox(catRaw); const c = b.getCenter(new THREE.Vector3());
+  catRaw.applyMatrix4(new THREE.Matrix4().makeTranslation(-c.x, -b.min.y, -c.z));
+}
+const catW = -half + 1.0;
+const catHalfW = dimOf(bbox(catRaw)).x / 2;
+const catProbe = meshOf(catRaw); catProbe.position.set(catW, 0, 0);
+const DECK_Y = surfaceY(catProbe, catW, 0);
+
+// ================= STAIRCASE: flip to deck, size top tread to DECK_Y =========
+const stairRawGeom = await loadGeom('staircase-to-catwalk.glb');
+const rb = bbox(stairRawGeom), rd = dimOf(rb);
+// raw ascent: which run (Z) end is high?
+const rawMesh = meshOf(stairRawGeom);
+const rcx = (rb.min.x + rb.max.x) / 2, rzMid = (rb.min.z + rb.max.z) / 2;
+let yMinZ = 0, yMaxZ = 0;
+for (let z = rb.min.z; z <= rb.max.z; z += rd.z / 24) {
+  const y = surfaceY(rawMesh, rcx, z);
+  if (y != null) (z < rzMid ? (yMinZ = Math.max(yMinZ, y)) : (yMaxZ = Math.max(yMaxZ, y)));
+}
+const STAIR_ROT = yMaxZ > yMinZ ? -Math.PI / 2 : Math.PI / 2;
+
+const STAIR_Z = 4.0, STAIR_WIDTH = 1.4;
+const STAIR_RUN = Math.max(1.6, DECK_Y * 1.7);
+const STAIR_X = (-half + 1.7) + STAIR_RUN / 2;
+const sX = STAIR_WIDTH / rd.x, sZ = STAIR_RUN / rd.z;
+
+function buildStair(sy) {
+  const g = stairRawGeom.clone();
+  g.applyMatrix4(new THREE.Matrix4().makeScale(sX, sy, sZ));
+  const b = bbox(g), c = b.getCenter(new THREE.Vector3());
+  g.applyMatrix4(new THREE.Matrix4().makeTranslation(-c.x, -b.min.y, -c.z)); // recenter
+  g.applyMatrix4(new THREE.Matrix4().makeRotationY(STAIR_ROT));
+  g.applyMatrix4(new THREE.Matrix4().makeTranslation(STAIR_X, 0, STAIR_Z));
+  return meshOf(g);
+}
+function treadProfile(mesh) {
+  const prof = []; let maxY = 0, atX = STAIR_X;
+  for (let x = STAIR_X - STAIR_RUN / 2; x <= STAIR_X + STAIR_RUN / 2 + 1e-3; x += 0.1) {
+    const y = surfaceY(mesh, x, STAIR_Z);
+    prof.push({ x: +x.toFixed(1), y: y == null ? null : +y.toFixed(2) });
+    if (y != null && y > maxY) { maxY = y; atX = x; }
+  }
+  return { prof, maxY, atX };
+}
+const syGuess = DECK_Y / rd.y;
+const t0 = treadProfile(buildStair(syGuess));
+const sY = t0.maxY > 0.01 ? syGuess * (DECK_Y / t0.maxY) : syGuess;
+const stair = buildStair(sY);
+const tread = treadProfile(stair);
+
+// ================= RAMP =================
+const ramp = {
+  minX: STAIR_X - STAIR_RUN / 2, maxX: STAIR_X + STAIR_RUN / 2,
+  minZ: STAIR_Z - STAIR_WIDTH / 2, maxZ: STAIR_Z + STAIR_WIDTH / 2,
+  lowY: 0, highY: DECK_Y,
 };
-// place a LOCAL (baked, centered) bbox: scale*inst, rotateY, translate
-function place(local, { x=0,y=0,z=0,ry=0,s=1 }) {
-  const cos=Math.cos(ry), sin=Math.sin(ry), cs=[];
-  for (const cx of [local.min[0],local.max[0]]) for (const cy of [local.min[1],local.max[1]]) for (const cz of [local.min[2],local.max[2]]) {
-    const X=cx*s, Y=cy*s, Z=cz*s;
-    cs.push([x + (X*cos + Z*sin), y + Y, z + (-X*sin + Z*cos)]);
-  }
-  return aabb(cs);
-}
-// staircase: geometry stays RAW (normalize's recenter position is OVERWRITTEN by
-// layout's stair.position.set), only scale s + rotateY + translate applied.
-function placeRaw(raw, s, ry, pos) {
-  const cos=Math.cos(ry), sin=Math.sin(ry), cs=[];
-  for (const cx of [raw.min[0],raw.max[0]]) for (const cy of [raw.min[1],raw.max[1]]) for (const cz of [raw.min[2],raw.max[2]]) {
-    const X=cx*s, Y=cy*s, Z=cz*s;
-    cs.push([pos[0] + (X*cos + Z*sin), pos[1] + Y, pos[2] + (-X*sin + Z*cos)]);
-  }
-  return aabb(cs);
-}
-const overlapXZ = (a, b) => a.min[0] < b.max[0] && a.max[0] > b.min[0] && a.min[2] < b.max[2] && a.max[2] > b.min[2];
 
-const half = 7, ring = 4.6, cy = 3, catLen = 4;
+// ================= REPORT =================
+console.log('\n=== CATWALK / MEZZANINE (grounded, raycast deck) ===');
+console.log(`  grounded at y=0; walkable DECK_Y (raycast) = ${f2(DECK_Y)}  half-width ${f2(catHalfW)}`);
 
-// ---- PILLARS ----
-const pillarRaw = await rawBox('tall-pillar.glb');
-const pillarLocal = normLocal(pillarRaw, 'y', 6);
-const stairPillar = [-ring, 6.0]; // relocated out of the stair run
-const pPos = [[-ring,-ring],[ring,-ring],[-ring,0],[ring,0],stairPillar,[ring,ring]];
-const pillars = pPos.map(([x,z]) => ({ x, z, box: place(pillarLocal, { x, z }) }));
+console.log('\n=== STAIRCASE (raycast-sized) ===');
+console.log(`  ascent: raw high end at ${yMaxZ > yMinZ ? '+Z' : '-Z'} -> rotation ${(STAIR_ROT * 180 / Math.PI).toFixed(0)}deg`);
+console.log(`  scale X ${f2(sX)} / Y ${f2(sY)} / Z ${f2(sZ)}   run ${f2(STAIR_RUN)}  width ${STAIR_WIDTH}  centre x=${f2(STAIR_X)} z=${STAIR_Z}`);
+console.log('  tread profile (surface Y along run at centre-width):');
+console.log('   ' + tread.prof.map((p) => `${p.x}:${p.y}`).join('  '));
+console.log(`  top tread Y = ${f2(tread.maxY)} @ x=${f2(tread.atX)}`);
 
-// ---- STAIRCASE (non-uniform: rise 3, run 4, width 1.4; recentred + wrapped) ----
-const STAIR_RISE = 3.0, STAIR_RUN = 4.0, STAIR_WIDTH = 1.4;
-const stairRaw = await rawBox('staircase-to-catwalk.glb');
-const stairScale = [STAIR_WIDTH/stairRaw.dim[0], STAIR_RISE/stairRaw.dim[1], STAIR_RUN/stairRaw.dim[2]];
-const stairLocal = { min: [-STAIR_WIDTH/2, 0, -STAIR_RUN/2], max: [STAIR_WIDTH/2, STAIR_RISE, STAIR_RUN/2] };
-const stairBox = place(stairLocal, { x: -half+3.4, y: 0, z: 4.0, ry: -Math.PI/2 });
+console.log('\n=== WALK-RAMP collider ===');
+console.log(`  x[${f2(ramp.minX)}, ${f2(ramp.maxX)}]  z[${f2(ramp.minZ)}, ${f2(ramp.maxZ)}]  lowY 0 -> highY ${f2(ramp.highY)}`);
 
-// ---- CATWALK (west run is the one the stairs serve) ----
-const catRaw = await rawBox('catwalk-section.glb');
-const catLocal = normLocal(catRaw, 'z', 4);
-const catWest = [-1,0,1].map((i) => ({ z: i*catLen, box: place(catLocal, { x:-half+1.0, y:cy, z:i*catLen, ry:0 }) }));
-
-console.log('\n=== PILLARS (visual mesh world AABB) — footprint half ≈', f2(pillarLocal.max[0]), 'm ===');
-for (const p of pillars) console.log(`  (${f2(p.x)}, ${f2(p.z)})  ${box2(p.box)}`);
-
-console.log('\n=== STAIRCASE (non-uniform) ===');
-console.log(`  raw bbox dim (WxHxD): ${f2(stairRaw.dim[0])} x ${f2(stairRaw.dim[1])} x ${f2(stairRaw.dim[2])}`);
-console.log(`  non-uniform scale: X ${f2(stairScale[0])}  Y ${f2(stairScale[1])}  Z ${f2(stairScale[2])}  (rise ${STAIR_RISE} / run ${STAIR_RUN} / width ${STAIR_WIDTH})`);
-console.log(`  placed: pos(-3.60, 0, 4.00)  rotY=-90°  (run 4.0 along X, width 1.4 along Z after rotation)`);
-console.log(`  world AABB: ${box2(stairBox)}`);
-console.log(`  base Y = ${f2(stairBox.min[1])}   top Y = ${f2(stairBox.max[1])}`);
-console.log(`  footprint: ${f2(stairBox.max[0]-stairBox.min[0])} (X) x ${f2(stairBox.max[2]-stairBox.min[2])} (Z)`);
-
-console.log('\n=== WEST CATWALK (deck the stairs should meet) ===');
-console.log(`  raw bbox dim: ${f2(catRaw.dim[0])} x ${f2(catRaw.dim[1])} x ${f2(catRaw.dim[2])}  (scale ${f2(catLocal.s)}x)`);
-for (const c of catWest) console.log(`  z=${f2(c.z)}  ${box2(c.box)}`);
-const deckBaseY = catWest[0].box.min[1], deckTopY = catWest[0].box.max[1];
-console.log(`  deck mesh base Y = ${f2(deckBaseY)}   deck mesh top Y = ${f2(deckTopY)}   (placed at y=${cy})`);
-
-const rampMinX = -half+1.4, rampMaxX = -half+5.4, rampMinZ = 3.3, rampMaxZ = 4.7;
-console.log('\n=== WALK-RAMP collider (layout.js) ===');
-console.log(`  x[${f2(rampMinX)}, ${f2(rampMaxX)}]  z[${f2(rampMinZ)}, ${f2(rampMaxZ)}]  axis=x  lowY=0 highY=${cy} lowAt=hi`);
-const rampCoversStair = rampMinX <= stairBox.min[0]+0.05 && rampMaxX >= stairBox.max[0]-0.05 && rampMinZ <= stairBox.min[2]+0.05 && rampMaxZ >= stairBox.max[2]-0.05;
-console.log(`  covers staircase footprint XZ? ${rampCoversStair ? 'YES' : 'NO — mismatch'}`);
-
-console.log('\n=== Q1: pillar overlapping the staircase footprint? ===');
-const stairXZ = { min: stairBox.min, max: stairBox.max };
-let any = false;
-for (const p of pillars) if (overlapXZ(p.box, stairXZ)) {
-  any = true;
-  console.log(`  YES — pillar (${f2(p.x)}, ${f2(p.z)}) overlaps. pillar ${box2(p.box)}  vs stair x[${f2(stairBox.min[0])}, ${f2(stairBox.max[0])}] z[${f2(stairBox.min[2])}, ${f2(stairBox.max[2])}]`);
-}
-if (!any) console.log('  none');
-
-console.log('\n=== Q2: catwalk deck Y vs staircase top-step Y ===');
-console.log(`  staircase top Y = ${f2(stairBox.max[1])}`);
-console.log(`  catwalk deck mesh spans Y ${f2(deckBaseY)}..${f2(deckTopY)} (walk surface is somewhere in this span)`);
-console.log(`  gap (deck base - stair top) = ${f2(deckBaseY - stairBox.max[1])}   (deck top - stair top) = ${f2(deckTopY - stairBox.max[1])}`);
-
-console.log('\n=== Q3: base on floor + scale/rotation ===');
-console.log(`  staircase base Y ${f2(stairBox.min[1])} (0 = on floor), top Y ${f2(stairBox.max[1])}`);
-console.log(`  scale X ${f2(stairScale[0])} / Y ${f2(stairScale[1])} / Z ${f2(stairScale[2])} (non-uniform), rotY -90°.`);
-console.log(`  slope: rise ${STAIR_RISE} over run ${STAIR_RUN} = ${f2(Math.atan2(STAIR_RISE, STAIR_RUN)*180/Math.PI)}°`);
+console.log('\n=== VERIFY ===');
+const treadOK = Math.abs(tread.maxY - DECK_Y) <= 0.05;
+const deckSide = tread.atX <= (-half + 1.7) + 0.5; // high end near the deck edge (~ -5.3), NOT interior
+const rampTopOK = Math.abs(ramp.highY - DECK_Y) < 1e-6;
+const rampCoversTread = ramp.minX <= tread.atX + 0.05 && ramp.maxX >= tread.atX - 0.05;
+console.log(`  [${treadOK ? 'PASS' : 'FAIL'}] stair top tread (${f2(tread.maxY)}) ≈ DECK_Y (${f2(DECK_Y)})  within 5cm`);
+console.log(`  [${deckSide ? 'PASS' : 'FAIL'}] high end at deck side (x=${f2(tread.atX)} ≤ ${f2(-half + 2.2)}), not interior`);
+console.log(`  [${rampTopOK ? 'PASS' : 'FAIL'}] ramp top = DECK_Y`);
+console.log(`  [${rampCoversTread ? 'PASS' : 'FAIL'}] ramp covers the tread footprint`);
+console.log(`  [n/a] mining rigs — verified removed from src/layout.js separately`);
+const allPass = treadOK && deckSide && rampTopOK && rampCoversTread;
+console.log(`\n  ${allPass ? '*** ALL PASS ***' : '*** FAIL — do not deploy ***'}`);
+process.exit(allPass ? 0 : 1);
