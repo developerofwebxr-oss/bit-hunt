@@ -65,10 +65,14 @@ export async function buildLayout(scene) {
 
   // ---- Pillars: 6 in two rows (corners + side mids), leaving the centre
   // aisle to the vault clear (no pillar in front of the vault). ----
+  // The far-west pillar was at [-ring, ring] — squarely inside the staircase
+  // run — so it's relocated along the west row to the corner (z = 6.0), clear
+  // of the stair footprint and the wall.
+  const stairPillar = [-ring, 6.0];
   const pPos = [
     [-ring, -ring], [ring, -ring],
     [-ring, 0], [ring, 0],
-    [-ring, ring], [ring, ring],
+    stairPillar, [ring, ring],
   ];
   const pillars = instanced('pillars', bake(A.pillar.obj), pPos.map(([x, z]) => ({ x, z })));
   group.add(pillars);
@@ -80,10 +84,10 @@ export async function buildLayout(scene) {
   const beamY = pillarH - 0.25;
   const beamT = [];
   const segs = [ // pairs of pillars to span with a beam
-    [[-ring, -ring], [-ring, 0]], [[-ring, 0], [-ring, ring]], // west run
-    [[ring, -ring], [ring, 0]], [[ring, 0], [ring, ring]],     // east run
-    [[-ring, -ring], [ring, -ring]],                            // north top (spans aisle, up high)
-    [[-ring, ring], [ring, ring]],                              // south top
+    [[-ring, -ring], [-ring, 0]], [[-ring, 0], stairPillar], // west run (to relocated pillar)
+    [[ring, -ring], [ring, 0]], [[ring, 0], [ring, ring]],   // east run
+    [[-ring, -ring], [ring, -ring]],                          // north top (spans aisle, up high)
+    [stairPillar, [ring, ring]],                             // south top (angled to the moved pillar)
   ];
   for (const [[ax, az], [bx, bz]] of segs) {
     const mx = (ax + bx) / 2, mz = (az + bz) / 2;
@@ -117,10 +121,25 @@ export async function buildLayout(scene) {
   group.add(instanced('catwalk', bake(A.catwalk.obj), catT));
 
   // ---- Staircase up to the west catwalk ----
-  const stair = A.staircase.obj;
-  stair.position.set(-half + 3.4, 0, 4.0);
-  stair.rotation.y = -Math.PI / 2; // run points toward the west wall; verify visually
+  // Non-uniform scale so it reads as stairs, not a stretched ramp: rise = 3 m to
+  // the deck plate (y=3), run/width kept believable. The mesh is recentred (the
+  // recenter the instanced pieces get via bake) then wrapped in a group so the
+  // -90° rotation pivots about its own centre and the base stays on the floor.
+  const STAIR_RISE = 3.0, STAIR_RUN = 4.0, STAIR_WIDTH = 1.4;
+  const stairMesh = A.staircase.obj;
+  stairMesh.updateMatrixWorld(true);
+  let sbox = new THREE.Box3().setFromObject(stairMesh);
+  const sdim = sbox.getSize(new THREE.Vector3());
+  stairMesh.scale.multiply(new THREE.Vector3(STAIR_WIDTH / sdim.x, STAIR_RISE / sdim.y, STAIR_RUN / sdim.z));
+  stairMesh.updateMatrixWorld(true);
+  sbox = new THREE.Box3().setFromObject(stairMesh);
+  const sctr = sbox.getCenter(new THREE.Vector3());
+  stairMesh.position.set(-sctr.x, -sbox.min.y, -sctr.z); // XZ-centre + base to y=0
+  const stair = new THREE.Group();
   stair.name = 'staircase';
+  stair.add(stairMesh);
+  stair.position.set(-half + 3.4, 0, 4.0); // run centred here; base interior, top at deck
+  stair.rotation.y = -Math.PI / 2;          // ascend toward the west deck (confirmed correct)
   group.add(stair);
 
   // ---- Scattered props (hiding spots) ----
@@ -172,9 +191,10 @@ export async function buildLayout(scene) {
   ];
 
   // Staircase ramp up to the WEST catwalk (run along X toward the wall; base at
-  // the interior/high-X end). Tune here if the climb feels off.
+  // the interior/high-X end). Matched to the corrected staircase footprint
+  // (x[-5.6,-1.6], z[3.3,4.7]); re-run scripts/diag-geometry.mjs after changes.
   const ramp = {
-    minX: -half + 1.4, maxX: -half + 5.4, minZ: 2.2, maxZ: 5.8,
+    minX: -half + 1.4, maxX: -half + 5.4, minZ: 3.3, maxZ: 4.7,
     axis: 'x', lowY: 0, highY: cy, lowAt: 'hi',
   };
 

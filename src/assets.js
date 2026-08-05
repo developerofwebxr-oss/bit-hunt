@@ -14,7 +14,7 @@ export const SCALE_TARGETS = {
   pillar:    { file: 'tall-pillar.glb',          fit: 'y', size: 6.0 },
   beam:      { file: 'green-beam.glb',           fit: 'x', size: 6.0 },  // length; spans pillar gap
   catwalk:   { file: 'catwalk-section.glb',      fit: 'z', size: 4.0 },  // deck length per section
-  staircase: { file: 'staircase-to-catwalk.glb', fit: 'y', size: 3.0 },  // rise floor->catwalk
+  staircase: { file: 'staircase-to-catwalk.glb', fit: null, size: 0 },  // non-uniform scale in layout.js (rise/run/width)
   miningRig: { file: 'mining-rig.glb',           fit: 'y', size: 2.0 },
   crate:     { file: 'storage-crate.glb',        fit: 'x', size: 1.0 },
   terminal:  { file: 'halo-terminal.glb',        fit: 'y', size: 1.2 },
