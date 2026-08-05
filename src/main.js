@@ -109,7 +109,7 @@ Promise.all([
     // register colliders (single source of truth from layout + vault)
     for (const b of layout.colliders) collision.addBox(b);
     for (const s of layout.surfaces) collision.addSurface(s);
-    collision.setRamp(layout.ramp);
+    for (const r of layout.ramps) collision.addRamp(r);
     if (v.collider) collision.addBox(v.collider);
     // the coin is a grabbable target demo for builder mode
     const coin = scene.getObjectByName('sat-coin');

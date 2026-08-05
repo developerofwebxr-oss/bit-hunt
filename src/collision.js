@@ -10,7 +10,7 @@
 export function createCollision() {
   const boxes = [];      // { minX,maxX,minZ,maxZ,minY,maxY } solid obstacles
   const surfaces = [];   // { minX,maxX,minZ,maxZ, y } walkable platforms (catwalk)
-  let ramp = null;       // { minX,maxX,minZ,maxZ, lowY, highY, axis:'x'|'z', lowAt }
+  const ramps = [];      // { minX,maxX,minZ,maxZ, lowY, highY, axis:'x'|'z', lowAt }
   let bounds = null;     // { half } room half-size; null = no clamp (AR)
   const PLAYER_R = 0.35;
   const PLAYER_H = 1.6;
@@ -19,7 +19,7 @@ export function createCollision() {
   function clearBounds() { bounds = null; }
   function addBox(b) { boxes.push(b); }
   function addSurface(s) { surfaces.push(s); }
-  function setRamp(r) { ramp = r; }
+  function addRamp(r) { ramps.push(r); }
 
   // Push pos (Vector3-like {x,z}) out of any box it overlaps in XZ, considering
   // the player's vertical span [feetY, feetY+H]. Mutates pos.x / pos.z.
@@ -62,8 +62,9 @@ export function createCollision() {
   // Resolve walkable ground height under (x,z) given current feet height.
   function groundHeight(x, z, currentY) {
     let g = 0;
-    // staircase ramp: interpolate along its run axis
-    if (ramp && x >= ramp.minX && x <= ramp.maxX && z >= ramp.minZ && z <= ramp.maxZ) {
+    // staircase ramps: interpolate along each run axis
+    for (const ramp of ramps) {
+      if (x < ramp.minX || x > ramp.maxX || z < ramp.minZ || z > ramp.maxZ) continue;
       const a = ramp.axis === 'x' ? x : z;
       const lo = ramp.axis === 'x' ? ramp.minX : ramp.minZ;
       const hi = ramp.axis === 'x' ? ramp.maxX : ramp.maxZ;
@@ -82,7 +83,7 @@ export function createCollision() {
 
   return {
     PLAYER_R, PLAYER_H,
-    setBounds, clearBounds, addBox, addSurface, setRamp,
+    setBounds, clearBounds, addBox, addSurface, addRamp,
     resolveXZ, clampBounds, groundHeight,
     get boxes() { return boxes; },
   };

@@ -73,16 +73,14 @@ export async function buildLayout(scene) {
   const group = new THREE.Group();
   group.name = 'layout';
 
-  // ---- Pillars: 6 in two rows (corners + side mids), leaving the centre
-  // aisle to the vault clear (no pillar in front of the vault). ----
-  // The far-west pillar was at [-ring, ring] — squarely inside the staircase
-  // run — so it's relocated along the west row to the corner (z = 6.0), clear
-  // of the stair footprint and the wall.
-  const stairPillar = [-ring, 6.0];
+  // ---- Pillars: 6 in two rows. Both far (+Z) pillars sit at z = 6.0 (the
+  // corners) so they clear the wall-hugging platforms + staircases, and the
+  // centre aisle to the vault stays clear. ----
+  const farW = [-ring, 6.0], farE = [ring, 6.0];
   const pPos = [
     [-ring, -ring], [ring, -ring],
     [-ring, 0], [ring, 0],
-    stairPillar, [ring, ring],
+    farW, farE,
   ];
   const pillars = instanced('pillars', bake(A.pillar.obj), pPos.map(([x, z]) => ({ x, z })));
   group.add(pillars);
@@ -94,10 +92,10 @@ export async function buildLayout(scene) {
   const beamY = pillarH - 0.25;
   const beamT = [];
   const segs = [ // pairs of pillars to span with a beam
-    [[-ring, -ring], [-ring, 0]], [[-ring, 0], stairPillar], // west run (to relocated pillar)
-    [[ring, -ring], [ring, 0]], [[ring, 0], [ring, ring]],   // east run
-    [[-ring, -ring], [ring, -ring]],                          // north top (spans aisle, up high)
-    [stairPillar, [ring, ring]],                             // south top (angled to the moved pillar)
+    [[-ring, -ring], [-ring, 0]], [[-ring, 0], farW], // west run
+    [[ring, -ring], [ring, 0]], [[ring, 0], farE],    // east run
+    [[-ring, -ring], [ring, -ring]],                   // north top (spans aisle, up high)
+    [farW, farE],                                      // south top (straight)
   ];
   for (const [[ax, az], [bx, bz]] of segs) {
     const mx = (ax + bx) / 2, mz = (az + bz) / 2;
@@ -120,37 +118,37 @@ export async function buildLayout(scene) {
     group.add(mesh);
   }
 
-  // ---- Catwalk / mezzanine along the west (-X) and east (+X) walls. GROUNDED
-  // on the floor (support bottom at y=0), NOT floating. The walkable deck height
-  // DECK_Y is measured by raycasting the real platform top (never the bbox base)
-  // and drives placement + locomotion ground height. ----
-  const catW = -half + 1.0, catE = half - 1.0, catLen = 4.0;
+  // ---- Mezzanine: ONE grounded platform per wall (west + east), centred on the
+  // wall. Deck rests on the floor (base y=0); DECK_Y is the raycast-measured
+  // walkable top. Sections tile along Z, so the Z-ends are OPEN (no rail) — that's
+  // where the staircase boards. ----
+  const catW = -half + 0.9, catE = half - 0.9;
   const catBaked = bake(A.catwalk.obj); // geometry recentred XZ, base at y=0
   catBaked.geometry.computeBoundingBox();
-  const catHalfW = (catBaked.geometry.boundingBox.max.x - catBaked.geometry.boundingBox.min.x) / 2;
-  // probe one grounded section; raycast its centre (between the edge rails) to
-  // find the actual walkable deck surface.
+  const cbb = catBaked.geometry.boundingBox;
+  const catHalfW = (cbb.max.x - cbb.min.x) / 2;
+  const catHalfLen = (cbb.max.z - cbb.min.z) / 2;
   const catProbe = new THREE.Mesh(catBaked.geometry, catBaked.material);
   catProbe.position.set(catW, 0, 0);
   catProbe.updateMatrixWorld(true);
   const DECK_Y = surfaceYAt(catProbe, catW, 0) ?? 1.5;
-  const catT = [];
-  for (let i = -1; i <= 1; i++) catT.push({ x: catW, y: 0, z: i * catLen, ry: 0 });         // west (grounded)
-  for (let i = -1; i <= 1; i++) catT.push({ x: catE, y: 0, z: i * catLen, ry: Math.PI });    // east (grounded)
-  group.add(instanced('catwalk', catBaked, catT));
+  // rail check: the +Z end (approach) should be open (~DECK_Y), the X-side railed
+  const zEndH = surfaceYAt(catProbe, catW, catHalfLen * 0.92);
+  const xSideH = surfaceYAt(catProbe, catW + catHalfW * 0.92, 0);
+  const zEndOpen = zEndH == null || zEndH <= DECK_Y + 0.12;
+  group.add(instanced('catwalk', catBaked, [
+    { x: catW, y: 0, z: 0, ry: 0 },          // west (one section)
+    { x: catE, y: 0, z: 0, ry: Math.PI },     // east (one section)
+  ]));
 
-  // ---- Staircase up to the west deck ----
-  // Sized/oriented by RAYCAST, not bbox: (1) probe the RAW model to see which run
-  // end is high, then pick the rotation that lands the HIGH end at the -X deck;
-  // (2) scale so the top walkable TREAD (raycast, ignoring the handrail) meets
-  // DECK_Y. Run/width give a believable slope; recentred + wrapped so rotation
-  // pivots about its own centre and the base stays on the floor.
-  const STAIR_Z = 4.0, STAIR_WIDTH = 1.4;
-  const STAIR_RUN = Math.max(1.6, DECK_Y * 1.7); // gentle slope to the (grounded) deck
-  const stairTopX = -half + 1.7;                  // west deck inner edge (~ -5.3)
-  const STAIR_X = stairTopX + STAIR_RUN / 2;      // run centre; top at deck, base toward interior
-
-  // raw dims + ascent direction
+  // ---- Staircases: one per platform, boarding the OPEN +Z end, running along Z
+  // in-line with the deck (same X) so you step straight on. Sized by the top
+  // walkable TREAD (raycast, not the handrail) so it meets DECK_Y flush. ----
+  const STAIR_WIDTH = 1.4;
+  const STAIR_RUN = Math.max(1.6, DECK_Y * 1.7);   // gentle slope
+  const STAIR_TOP_Z = catHalfLen;                  // deck open +Z edge
+  const STAIR_Zc = STAIR_TOP_Z + STAIR_RUN / 2;    // run centre; top at deck, base beyond (+Z)
+  // raw ascent: which run (Z) end is high? Face that end at the deck (-Z of the stair)
   A.staircase.obj.updateMatrixWorld(true);
   const rawStair = new THREE.Box3().setFromObject(A.staircase.obj);
   const rawDim = rawStair.getSize(new THREE.Vector3());
@@ -160,56 +158,56 @@ export async function buildLayout(scene) {
     const y = surfaceYAt(A.staircase.obj, rcx, z);
     if (y != null) (z < rzMid ? (yMinZ = Math.max(yMinZ, y)) : (yMaxZ = Math.max(yMaxZ, y)));
   }
-  // rotateY sends local +Z -> -X at -90°, local -Z -> -X at +90°. Face high end at -X deck.
-  const STAIR_ROT = yMaxZ > yMinZ ? -Math.PI / 2 : Math.PI / 2;
+  const STAIR_ROT = yMaxZ > yMinZ ? Math.PI : 0;   // send raw high end to -Z (deck edge)
   const sX = STAIR_WIDTH / rawDim.x, sZ = STAIR_RUN / rawDim.z;
 
-  const buildStair = (sy) => {
+  const buildStair = (catX, sy) => {
     const mesh = A.staircase.obj.clone(true);
     mesh.scale.set(sX, sy, sZ);
     mesh.updateMatrixWorld(true);
     const bb = new THREE.Box3().setFromObject(mesh);
     const c = bb.getCenter(new THREE.Vector3());
-    mesh.position.set(-c.x, -bb.min.y, -c.z);     // recenter XZ + base to y=0
+    mesh.position.set(-c.x, -bb.min.y, -c.z);      // recenter XZ + base to y=0
     const g = new THREE.Group();
     g.name = 'staircase';
     g.add(mesh);
-    g.position.set(STAIR_X, 0, STAIR_Z);
+    g.position.set(catX, 0, STAIR_Zc);
     g.rotation.y = STAIR_ROT;
     g.updateMatrixWorld(true);
     return g;
   };
-  // top tread = max surface Y along the run at centre-width (rails are at the edges)
-  const topTread = (g) => {
-    let maxY = 0, atX = STAIR_X;
-    for (let x = STAIR_X - STAIR_RUN / 2; x <= STAIR_X + STAIR_RUN / 2 + 1e-3; x += 0.08) {
-      const y = surfaceYAt(g, x, STAIR_Z);
-      if (y != null && y > maxY) { maxY = y; atX = x; }
+  // top tread = max surface Y along the run at centre-width (rails at the edges)
+  const topTread = (g, catX) => {
+    let maxY = 0, atZ = STAIR_TOP_Z;
+    for (let z = STAIR_TOP_Z - 0.5; z <= STAIR_Zc + STAIR_RUN / 2 + 1e-3; z += 0.08) {
+      const y = surfaceYAt(g, catX, z);
+      if (y != null && y > maxY) { maxY = y; atZ = z; }
     }
-    return { maxY, atX };
+    return { maxY, atZ };
   };
-  // one linear correction so the top tread hits DECK_Y (tread ∝ scale.y)
   const syGuess = DECK_Y / rawDim.y;
-  const t0 = topTread(buildStair(syGuess));
+  const t0 = topTread(buildStair(catW, syGuess), catW);
   const sY = t0.maxY > 0.01 ? syGuess * (DECK_Y / t0.maxY) : syGuess;
-  const stair = buildStair(sY);
-  group.add(stair);
-  const stairTread = topTread(stair); // for the log/collider
-  console.log(`[layout] DECK_Y=${DECK_Y.toFixed(2)}  stairTopTread=${stairTread.maxY.toFixed(2)} @x=${stairTread.atX.toFixed(2)}  rot=${(STAIR_ROT * 180 / Math.PI).toFixed(0)}deg`);
+  group.add(buildStair(catW, sY));
+  group.add(buildStair(catE, sY));
+  const treadW = topTread(group.getObjectByName('staircase'), catW);
+  const junctionH = surfaceYAt(catProbe, catW, catHalfLen - 0.2); // deck just inside the top
+  console.log(`[layout] DECK_Y=${DECK_Y.toFixed(2)} tread=${treadW.maxY.toFixed(2)}@z${treadW.atZ.toFixed(2)} rot=${(STAIR_ROT * 180 / Math.PI) | 0} zEndOpen=${zEndOpen} junction=${junctionH?.toFixed(2)} xSide=${xSideH?.toFixed(2)}`);
 
-  // ---- Scattered props (hiding spots). Mining rigs removed for now. ----
+  // ---- Scattered props (hiding spots). Mining rigs + the vault-adjacent crate
+  // removed for now (the latter was clipping the vault door). ----
   const crateT = [
-    { x: -3.6, z: -1.2, ry: 0.2 },
+    { x: -2.6, z: 0.4, ry: 0.2 },              // moved clear of pillar (-4.6,0)
     { x: 2.2, z: 1.4, ry: 1.1 },
-    { x: -1.0, z: -3.4, ry: -0.5 },
     { x: 4.0, z: 3.2, ry: 0.9 },
     { x: catE, y: DECK_Y, z: -1.5, ry: 0.3 }, // one up on the (grounded) east deck
   ];
   group.add(instanced('crates', bake(A.crate.obj), crateT));
 
+  // Terminals kept clear of the wall-hugging staircases (x ≈ ±6) and pillars.
   const termT = [
-    { x: -4.2, z: 4.0, ry: 0.7 },
-    { x: 4.4, z: -3.6, ry: -1.2 },
+    { x: -3.4, z: 4.2, ry: 0.7 },
+    { x: 3.4, z: -2.6, ry: -1.2 },             // moved clear of pillar (4.6,-4.6)
     { x: -3.0, z: -4.0, ry: 2.2 },
   ];
   group.add(instanced('terminals', bake(A.terminal.obj), termT));
@@ -232,20 +230,33 @@ export async function buildLayout(scene) {
   for (const t of termT) colliders.push(box(t.x, t.z, 0.4, 1.2));          // terminals
   // (mining rigs removed — no colliders either, so nothing invisible to bump)
 
-  // Catwalk walkable surfaces (west + east runs) — grounded deck at DECK_Y.
+  // Deck underside collision: each platform footprint is SOLID from floor to
+  // DECK_Y, so you can't phase up through the deck from below. resolveXZ skips a
+  // box once feet are at/above its maxY, so walking ON the deck (feet = DECK_Y)
+  // is unaffected — the only way up is the staircase. Inset the +Z entry edge so
+  // the ramp boards without a push-out wall.
+  for (const catX of [catW, catE]) {
+    const b = box(catX, 0, catHalfW, DECK_Y, 0);
+    b.minZ = -catHalfLen; b.maxZ = catHalfLen - 0.35; // full footprint, entry edge inset
+    colliders.push(b);
+  }
+
+  // Walkable deck surfaces (west + east) at DECK_Y — reachable only via the stairs.
   const surfaces = [
-    { minX: catW - catHalfW, maxX: catW + catHalfW, minZ: -catLen * 1.5, maxZ: catLen * 1.5, y: DECK_Y }, // west
-    { minX: catE - catHalfW, maxX: catE + catHalfW, minZ: -catLen * 1.5, maxZ: catLen * 1.5, y: DECK_Y }, // east
+    { minX: catW - catHalfW, maxX: catW + catHalfW, minZ: -catHalfLen, maxZ: catHalfLen, y: DECK_Y },
+    { minX: catE - catHalfW, maxX: catE + catHalfW, minZ: -catHalfLen, maxZ: catHalfLen, y: DECK_Y },
   ];
 
-  // Walk-ramp collider matched to the corrected staircase: footprint = the tread
-  // run/width, base (y=0) at the interior/high-X end, top = DECK_Y at the deck side.
-  const ramp = {
-    minX: STAIR_X - STAIR_RUN / 2, maxX: STAIR_X + STAIR_RUN / 2,
-    minZ: STAIR_Z - STAIR_WIDTH / 2, maxZ: STAIR_Z + STAIR_WIDTH / 2,
-    axis: 'x', lowY: 0, highY: DECK_Y, lowAt: 'hi',
-  };
+  // Walk-ramps (one per staircase): run along Z, base (y=0) at the +Z end, top
+  // (DECK_Y) at the deck edge. Top overlaps the deck edge slightly so you reach
+  // DECK_Y before the deck collider begins.
+  const rampFor = (catX) => ({
+    minX: catX - STAIR_WIDTH / 2, maxX: catX + STAIR_WIDTH / 2,
+    minZ: STAIR_TOP_Z - 0.3, maxZ: STAIR_Zc + STAIR_RUN / 2,
+    axis: 'z', lowY: 0, highY: DECK_Y, lowAt: 'hi',
+  });
+  const ramps = [rampFor(catW), rampFor(catE)];
 
   scene.add(group);
-  return { group, colliders, surfaces, ramp };
+  return { group, colliders, surfaces, ramps, DECK_Y, catW, catE, catHalfW, catHalfLen, STAIR_TOP_Z, STAIR_RUN, STAIR_WIDTH };
 }
