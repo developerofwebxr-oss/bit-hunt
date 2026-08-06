@@ -218,11 +218,9 @@ export async function buildLayout(scene) {
   ];
   group.add(instanced('terminals', bake(A.terminal.obj), termT));
 
-  // ---- One sat coin as a scale/look check (standing, near centre) ----
-  const coin = A.coin.obj;
-  coin.position.set(0, 0.0, 1.5);
-  coin.name = 'sat-coin';
-  group.add(coin);
+  // ---- Sat-coin prototype: the hunt sats (sats.js) clone this; NOT added here. ----
+  const coinObj = A.coin.obj;
+  coinObj.name = 'sat-coin-proto';
 
   // ---- Collision data (single source of truth with the placements above) ----
   // Boxes are XZ AABBs with a vertical [minY,maxY] span; half-extents are the
@@ -263,6 +261,15 @@ export async function buildLayout(scene) {
   });
   const ramps = [rampFor(catW), rampFor(catE)];
 
+  // Typed cover for the hide-spot generator (positions + radii by kind).
+  const cover = {
+    half,
+    pillars: pPos.map(([x, z]) => ({ x, z, r: 0.75 })),
+    crates: crateT.map((t) => ({ x: t.x, z: t.z, r: 0.55, y: t.y || 0 })),
+    terminals: termT.map((t) => ({ x: t.x, z: t.z, r: 0.4 })),
+    decks: surfaces.map((s) => ({ minX: s.minX, maxX: s.maxX, minZ: s.minZ, maxZ: s.maxZ, y: s.y })),
+  };
+
   scene.add(group);
-  return { group, colliders, surfaces, ramps, DECK_Y, catW, catE, catHalfW, catHalfLen, STAIR_TOP_Z, STAIR_RUN, STAIR_WIDTH };
+  return { group, colliders, surfaces, ramps, cover, coinObj, DECK_Y, catW, catE, catHalfW, catHalfLen, STAIR_TOP_Z, STAIR_RUN, STAIR_WIDTH };
 }

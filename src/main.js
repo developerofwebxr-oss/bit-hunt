@@ -16,7 +16,11 @@ import { createInteraction } from './interaction.js';
 import { createEnvironment } from './environment.js';
 import { createPauseMenu } from './pausemenu.js';
 import { createVignette } from './vignette.js';
+import { createSats } from './sats.js';
 import { comfort } from './comfort.js';
+
+const HUNT_SEED = 1337; // single seed -> swap for a server seed in v4 (multiplayer)
+let sats = null;
 
 const EYE_HEIGHT = 1.6;
 const app = document.getElementById('app');
@@ -96,6 +100,15 @@ pauseMenu = createPauseMenu({
 // on-screen menu button (flat/mobile) → same as Left-X
 document.getElementById('btn-pause')?.addEventListener('click', () => pauseMenu.toggle());
 
+// ---- Start-Hunt trigger (placeholder: button toggles burst/reset; H / R keys) ----
+function triggerHunt() { sats && (sats.isActive ? sats.reset() : sats.burst()); }
+document.getElementById('btn-hunt')?.addEventListener('click', triggerHunt);
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'KeyH') triggerHunt();
+  else if (e.code === 'KeyR') sats?.reset();
+});
+
 // ---- build the world ----
 let vaultApi = null;
 modeswitcher.setStatus('loading assets…');
@@ -111,13 +124,20 @@ Promise.all([
     for (const s of layout.surfaces) collision.addSurface(s);
     for (const r of layout.ramps) collision.addRamp(r);
     if (v.collider) collision.addBox(v.collider);
-    // the coin is a grabbable target demo for builder mode
-    const coin = scene.getObjectByName('sat-coin');
-    if (coin) interaction.addTarget(coin, () => console.log('[select] sat coin'), { grabbable: true });
     // environment adapter owns the shell; apply the current mode now
     environment = createEnvironment({ shell: room.group, collision, half: ROOM.size / 2 });
     environment.applyMode(currentMode);
-    modeswitcher.setStatus('ready · flat mode');
+
+    // ---- Gameplay Phase 1: vault burst + 21 hidden sats (seeded) ----
+    const cover = {
+      ...layout.cover,
+      center: [0, 0], eyeY: EYE_HEIGHT, coinR: 0.13,
+      vault: v.collider,
+      colliders: [...layout.colliders, v.collider], // occlusion + embedding source
+    };
+    sats = createSats({ scene, vaultApi: v, coinObj: layout.coinObj, cover, seed: HUNT_SEED });
+    window.__sat.sats = sats;
+    modeswitcher.setStatus('ready · press Start Hunt (H)');
     reportStats();
   })
   .catch((err) => {
@@ -161,6 +181,7 @@ renderer.setAnimationLoop(() => {
   interaction.update();                                  // lasers, select, grip, B/Y
   vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
   vaultApi?.updateVault(dt);
+  sats?.update(dt, clock.elapsedTime);
   if (renderer.xr.isPresenting) {
     renderer.render(scene, camera); // XR: direct path, no post
   } else {

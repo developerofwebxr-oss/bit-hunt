@@ -7,6 +7,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { NodeIO } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import draco3d from 'draco3dgltf';
+import { generateHideSpots, SAT_COUNT } from '../src/sats.js';
 
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS)
   .registerDependencies({ 'draco3d.decoder': await draco3d.createDecoderModule() });
@@ -152,6 +153,41 @@ const deckSurfNearPillar = surfaceY(catProbe, pillarColFace - 0.1, 0);   // deck
 const towardPillar = resolveXZ(pillarColFace - 0.05, 0, DECK_Y, allBoxes); // just outside the pillar, push in
 const pillarBlocksOnDeck = towardPillar.x <= pillarColFace + 0.02 && deckSurfNearPillar != null && Math.abs(deckSurfNearPillar - DECK_Y) < 0.05;
 
+// ===== SATS: hide-spot generation (same generateHideSpots the game uses) =====
+const colBox = (x, z, hx, hz, minY, maxY) => ({ minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz, minY, maxY });
+const coverColliders = [
+  ...[[-ring,-ring],[ring,-ring],[-ring,0],[ring,0],[-ring,6],[ring,6]].map(([x, z]) => colBox(x, z, 0.6, 0.6, 0, 6)),
+  ...crates.map((c) => colBox(c.x, c.z, 0.55, 0.55, c.y || 0, (c.y || 0) + 1.0)),
+  ...terms.map((t) => colBox(t.x, t.z, 0.4, 0.4, 0, 1.2)),
+  ...[cW, cE].map((x) => { const b = colBox(x, 0, catHalfW, catHalfLen, 0, DECK_Y); b.maxZ = catHalfLen - 0.35; return b; }),
+  colBox(0, -5.45, 1.9, 1.75, 0, 3.4),
+];
+const cover = {
+  half, center: [0, 0], eyeY: 1.6, coinR: 0.13,
+  pillars: [[-ring,-ring],[ring,-ring],[-ring,0],[ring,0],[-ring,6],[ring,6]].map(([x, z]) => ({ x, z, r: 0.75 })),
+  crates: crates.map((c) => ({ x: c.x, z: c.z, r: 0.55, y: c.y || 0 })),
+  terminals: terms.map((t) => ({ x: t.x, z: t.z, r: 0.4 })),
+  decks: [cW, cE].map((x) => ({ minX: x - catHalfW, maxX: x + catHalfW, minZ: -catHalfLen, maxZ: catHalfLen, y: DECK_Y })),
+  vault: colBox(0, -5.45, 1.9, 1.75, 0, 3.4),
+  colliders: coverColliders,
+};
+const HUNT_SEED = 1337;
+const hideSpots = generateHideSpots(HUNT_SEED, cover);
+// independent occlusion + embedding recompute
+const segHit = (a, b, box) => { const lo = [box.minX, box.minY, box.minZ], hi = [box.maxX, box.maxY, box.maxZ]; let t0 = 0, t1 = 1; for (let i = 0; i < 3; i++) { const d = b[i] - a[i]; if (Math.abs(d) < 1e-9) { if (a[i] < lo[i] || a[i] > hi[i]) return false; continue; } let ta = (lo[i] - a[i]) / d, tb = (hi[i] - a[i]) / d; if (ta > tb) { const s = ta; ta = tb; tb = s; } t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) return false; } return t1 > 0.03 && t0 < 0.985; };
+const eye = [0, 1.6, 0], CR = 0.13;
+const occluders = (s) => coverColliders.filter((b) => segHit(eye, [s.x, s.y + 0.12, s.z], b)).length;
+const embeddedIn = (s) => coverColliders.filter((b) => s.x > b.minX - CR * 0.4 && s.x < b.maxX + CR * 0.4 && s.z > b.minZ - CR * 0.4 && s.z < b.maxZ + CR * 0.4 && s.y > b.minY - 0.02 && s.y < b.maxY - 0.03).length;
+const deckFoot = (s) => cover.decks.some((d) => s.x >= d.minX && s.x <= d.maxX && s.z >= d.minZ && s.z <= d.maxZ);
+// rests on a surface if on the floor (y≈0) OR on a deck (y≈DECK_Y within a footprint)
+const onSurface = (s) => Math.abs(s.y) < 0.02 || (Math.abs(s.y - DECK_Y) < 0.05 && deckFoot(s));
+const occCounts = hideSpots.map(occluders);
+const losCount = occCounts.filter((n) => n === 0).length;
+const embedCount = hideSpots.filter((s) => embeddedIn(s) > 0).length;
+const surfCount = hideSpots.filter(onSurface).length;
+const belowFloor = hideSpots.filter((s) => s.y < -0.01).length;
+const dist = {}; hideSpots.forEach((s) => (dist[s.type] = (dist[s.type] || 0) + 1));
+
 // ===== REPORT =====
 console.log('\n=== MEZZANINE (scaled ' + MEZZ + '×) ===');
 console.log(`  DECK_Y=${f2(DECK_Y)} (was ~1.19), deck half ${f2(catHalfW)}×${f2(catHalfLen)}`);
@@ -172,8 +208,19 @@ console.log('\n=== DECK UNDERSIDE ===');
 console.log(`  from below (feet@0): pushed to (${f2(underPush.x)},${f2(underPush.z)}) blocked=${blockedFromBelow}`);
 console.log(`  on top (feet@DECK_Y): stays walkable=${walkableOnTop}`);
 
+console.log('\n=== SATS (seed ' + HUNT_SEED + ') ===');
+console.log(`  spawned: ${hideSpots.length}/${SAT_COUNT}`);
+console.log(`  rest on real surface: ${surfCount}/${hideSpots.length}  (below floor: ${belowFloor})`);
+console.log(`  occlusion from room-centre eye: ${hideSpots.length - losCount}/${hideSpots.length} occluded, ${losCount} in direct line of sight`);
+console.log(`  embedded in solid geometry: ${embedCount}`);
+console.log(`  distribution by cover: ${Object.entries(dist).map(([k, v]) => `${k}:${v}`).join('  ')}`);
+
 console.log('\n=== VERIFY ===');
 const checks = [
+  [hideSpots.length === SAT_COUNT, `exactly ${SAT_COUNT} sats spawned (${hideSpots.length})`],
+  [surfCount === hideSpots.length && belowFloor === 0, `all sats rest on a real surface (${surfCount}/${hideSpots.length}, none below floor)`],
+  [losCount === 0, `all sats occluded from the room-centre eye (${losCount} in direct LOS)`],
+  [embedCount === 0, `no sats embedded in solid geometry (${embedCount})`],
   [Math.abs(treadW.maxY - DECK_Y) <= 0.05, `stair top tread (${f2(treadW.maxY)}) ≈ DECK_Y (${f2(DECK_Y)}) within 5cm`],
   [zEndOpen && (junctionH == null || junctionH <= DECK_Y + 0.12), `staircase boards an OPEN +Z end at z=${f2(STAIR_TOP_Z)}`],
   [Math.abs((cW - catHalfW) - (-half)) < 0.05, 'deck outer edge fills to the wall (no dead space behind)'],
