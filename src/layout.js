@@ -122,30 +122,37 @@ export async function buildLayout(scene) {
   // wall. Deck rests on the floor (base y=0); DECK_Y is the raycast-measured
   // walkable top. Sections tile along Z, so the Z-ends are OPEN (no rail) — that's
   // where the staircase boards. ----
-  const catW = -half + 0.9, catE = half - 0.9;
-  const catBaked = bake(A.catwalk.obj); // geometry recentred XZ, base at y=0
+  // Uniformly scale the mezzanine + staircase up (MEZZ_SCALE) — taller AND wider
+  // together, proportions preserved. The deck extends inward to the pillar line
+  // and its outer edge sits at the wall (fills the wall-side dead space); the
+  // west pillars pass UP THROUGH the deck (columns through the floor) and stay
+  // solid up there via their own colliders, so you walk around them on the deck.
+  const MEZZ_SCALE = 1.45;
+  const catBaked = bake(A.catwalk.obj);
+  catBaked.geometry.applyMatrix4(new THREE.Matrix4().makeScale(MEZZ_SCALE, MEZZ_SCALE, MEZZ_SCALE));
   catBaked.geometry.computeBoundingBox();
   const cbb = catBaked.geometry.boundingBox;
   const catHalfW = (cbb.max.x - cbb.min.x) / 2;
   const catHalfLen = (cbb.max.z - cbb.min.z) / 2;
+  const catW = -half + catHalfW, catE = half - catHalfW; // outer edge flush to the wall
   const catProbe = new THREE.Mesh(catBaked.geometry, catBaked.material);
   catProbe.position.set(catW, 0, 0);
   catProbe.updateMatrixWorld(true);
-  const DECK_Y = surfaceYAt(catProbe, catW, 0) ?? 1.5;
-  // rail check: the +Z end (approach) should be open (~DECK_Y), the X-side railed
+  const DECK_Y = surfaceYAt(catProbe, catW, 0) ?? 1.7;
+  // rail check: the +Z end (approach) should be open (~DECK_Y)
   const zEndH = surfaceYAt(catProbe, catW, catHalfLen * 0.92);
-  const xSideH = surfaceYAt(catProbe, catW + catHalfW * 0.92, 0);
+  const junctionH = surfaceYAt(catProbe, catW, catHalfLen - 0.25);
   const zEndOpen = zEndH == null || zEndH <= DECK_Y + 0.12;
   group.add(instanced('catwalk', catBaked, [
     { x: catW, y: 0, z: 0, ry: 0 },          // west (one section)
     { x: catE, y: 0, z: 0, ry: Math.PI },     // east (one section)
   ]));
 
-  // ---- Staircases: one per platform, boarding the OPEN +Z end, running along Z
-  // in-line with the deck (same X) so you step straight on. Sized by the top
-  // walkable TREAD (raycast, not the handrail) so it meets DECK_Y flush. ----
-  const STAIR_WIDTH = 1.4;
-  const STAIR_RUN = Math.max(1.6, DECK_Y * 1.7);   // gentle slope
+  // ---- Staircases: one per platform, boarding the OPEN +Z end, in-line with the
+  // deck (same X + width) so the whole structure scales together. Sized by the
+  // top walkable TREAD (raycast, not the handrail) so it meets DECK_Y flush. ----
+  const STAIR_WIDTH = 2 * catHalfW;                // match the deck width
+  const STAIR_RUN = DECK_Y * 1.7;                  // scales with DECK_Y (uniform)
   const STAIR_TOP_Z = catHalfLen;                  // deck open +Z edge
   const STAIR_Zc = STAIR_TOP_Z + STAIR_RUN / 2;    // run centre; top at deck, base beyond (+Z)
   // raw ascent: which run (Z) end is high? Face that end at the deck (-Z of the stair)
@@ -191,8 +198,7 @@ export async function buildLayout(scene) {
   group.add(buildStair(catW, sY));
   group.add(buildStair(catE, sY));
   const treadW = topTread(group.getObjectByName('staircase'), catW);
-  const junctionH = surfaceYAt(catProbe, catW, catHalfLen - 0.2); // deck just inside the top
-  console.log(`[layout] DECK_Y=${DECK_Y.toFixed(2)} tread=${treadW.maxY.toFixed(2)}@z${treadW.atZ.toFixed(2)} rot=${(STAIR_ROT * 180 / Math.PI) | 0} zEndOpen=${zEndOpen} junction=${junctionH?.toFixed(2)} xSide=${xSideH?.toFixed(2)}`);
+  console.log(`[layout] MEZZx${MEZZ_SCALE} DECK_Y=${DECK_Y.toFixed(2)} deckX[${(catW - catHalfW).toFixed(2)},${(catW + catHalfW).toFixed(2)}] deckZ±${catHalfLen.toFixed(2)} tread=${treadW.maxY.toFixed(2)}@z${treadW.atZ.toFixed(2)} zEndOpen=${zEndOpen} junction=${junctionH?.toFixed(2)}`);
 
   // ---- Scattered props (hiding spots). Mining rigs + the vault-adjacent crate
   // removed for now (the latter was clipping the vault door). ----
