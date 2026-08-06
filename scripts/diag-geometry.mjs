@@ -59,6 +59,7 @@ const catG = normalize(await loadGeom('catwalk-section.glb'), 'z', 4);
 catG.applyMatrix4(new THREE.Matrix4().makeScale(MEZZ, MEZZ, MEZZ));
 const cbb = bb(catG); const catHalfW = dim(cbb).x / 2, catHalfLen = dim(cbb).z / 2;
 const cW = -half + catHalfW, cE = half - catHalfW;
+const DECK_Z = -half + catHalfLen; // deck far (-Z) end at the -Z wall; stair points +Z into open
 const catProbe = meshOf(catG); catProbe.position.set(cW, 0, 0);
 const DECK_Y = surfaceY(catProbe, cW, 0);
 const zEndH = surfaceY(catProbe, cW, catHalfLen * 0.92);
@@ -72,7 +73,7 @@ const rawMesh = meshOf(stairRaw), rbx = bb(stairRaw), rzMid = (rbx.min.z + rbx.m
 let yMinZ = 0, yMaxZ = 0;
 for (let z = rbx.min.z; z <= rbx.max.z; z += rd.z / 24) { const y = surfaceY(rawMesh, rcx, z); if (y != null) (z < rzMid ? (yMinZ = Math.max(yMinZ, y)) : (yMaxZ = Math.max(yMaxZ, y))); }
 const STAIR_ROT = yMaxZ > yMinZ ? Math.PI : 0;
-const STAIR_WIDTH = 2 * catHalfW, STAIR_RUN = DECK_Y * 1.7, STAIR_TOP_Z = catHalfLen, STAIR_Zc = STAIR_TOP_Z + STAIR_RUN / 2;
+const STAIR_WIDTH = 2 * catHalfW, STAIR_RUN = DECK_Y * 1.7, STAIR_TOP_Z = DECK_Z + catHalfLen, STAIR_Zc = STAIR_TOP_Z + STAIR_RUN / 2;
 const sX = STAIR_WIDTH / rd.x, sZ = STAIR_RUN / rd.z;
 function buildStair(catX, sy) {
   const g = stairRaw.clone();
@@ -105,7 +106,7 @@ const box = (x, z, hx, hz, y0, y1, name) => ({ minX: x - hx, maxX: x + hx, minZ:
 const pVis = [[-ring,-ring],[ring,-ring],[-ring,0],[ring,0],[-ring,6],[ring,6]].map(([x, z]) => box(x, z, 0.75, 0.77, 0, 6, `pillar@${f2(x)},${f2(z)}`));
 const pCol = [[-ring,-ring],[ring,-ring],[-ring,0],[ring,0],[-ring,6],[ring,6]].map(([x, z]) => ({ minX: x - 0.6, maxX: x + 0.6, minZ: z - 0.6, maxZ: z + 0.6, minY: 0, maxY: 6 }));
 const vault = box(0, -5.45, 1.9, 1.75, 0, 3.4, 'vault');
-const decksVis = [cW, cE].map((x) => box(x, 0, catHalfW, catHalfLen, 0, DECK_Y, `deck@${f2(x)}`));
+const decksVis = [cW, cE].map((x) => box(x, DECK_Z, catHalfW, catHalfLen, 0, DECK_Y, `deck@${f2(x)}`));
 const stairsVis = [cW, cE].map((x) => box(x, STAIR_Zc, STAIR_WIDTH / 2, STAIR_RUN / 2 + 1e-9, 0, DECK_Y, `stair@${f2(x)}`));
 
 const yOv = (a, b) => a.y0 < (b.y1 ?? b.maxY) - 0.02 && a.y1 > (b.y0 ?? b.minY) + 0.02;
@@ -141,17 +142,31 @@ function resolveXZ(px, pz, feetY, boxes) {
   }
   return p;
 }
-const deckBoxes = [cW, cE].map((x) => ({ minX: x - catHalfW, maxX: x + catHalfW, minZ: -catHalfLen, maxZ: catHalfLen - 0.35, minY: 0, maxY: DECK_Y }));
+const deckBoxes = [cW, cE].map((x) => ({ minX: x - catHalfW, maxX: x + catHalfW, minZ: DECK_Z - catHalfLen, maxZ: DECK_Z + catHalfLen - 0.35, minY: 0, maxY: DECK_Y }));
 const allBoxes = [...deckBoxes, ...pCol];
-const underPush = resolveXZ(cW, 0, 0, allBoxes);          // under deck, feet on floor
-const onDeck = resolveXZ(cW, 0, DECK_Y, allBoxes);        // standing on deck near wall
-const blockedFromBelow = Math.hypot(underPush.x - cW, underPush.z - 0) > 0.1;
-const walkableOnTop = Math.hypot(onDeck.x - cW, onDeck.z - 0) < 0.01;
-// walk toward the z=0 west pillar ON the deck: must be blocked at the pillar collider face
-const pillarColFace = -ring - 0.6; // -5.2
-const deckSurfNearPillar = surfaceY(catProbe, pillarColFace - 0.1, 0);   // deck present up to the pillar
-const towardPillar = resolveXZ(pillarColFace - 0.05, 0, DECK_Y, allBoxes); // just outside the pillar, push in
+const testZ = DECK_Z;                                     // a z inside the moved deck footprint
+const underPush = resolveXZ(cW, testZ, 0, allBoxes);      // under deck, feet on floor
+const onDeck = resolveXZ(cW, testZ, DECK_Y, allBoxes);    // standing on deck near wall
+const blockedFromBelow = Math.hypot(underPush.x - cW, underPush.z - testZ) > 0.1;
+const walkableOnTop = Math.hypot(onDeck.x - cW, onDeck.z - testZ) < 0.01;
+// pillar now passing through the moved deck (z=-4.6 west pillar): solid on the deck
+const catProbeMoved = meshOf(catG); catProbeMoved.position.set(cW, 0, DECK_Z);
+const pillarZ = -ring, pillarColFace = -ring - 0.6; // pillar centre z=-4.6, wall-side face x=-5.2
+const deckSurfNearPillar = surfaceY(catProbeMoved, pillarColFace - 0.1, pillarZ);
+const towardPillar = resolveXZ(pillarColFace - 0.05, pillarZ, DECK_Y, allBoxes);
 const pillarBlocksOnDeck = towardPillar.x <= pillarColFace + 0.02 && deckSurfNearPillar != null && Math.abs(deckSurfNearPillar - DECK_Y) < 0.05;
+
+// stair-approach clearance: open walkable floor in front of each stair base (+Z)
+function approachClearance(catX) {
+  const zBase = STAIR_TOP_Z + STAIR_RUN;   // stair foot z
+  const wallClear = half - zBase;          // +Z wall distance
+  let pillarClear = Infinity;
+  for (const [px, pz] of [[-ring,-ring],[ring,-ring],[-ring,0],[ring,0],[-ring,6],[ring,6]]) {
+    if (px + 0.75 > catX - 0.5 && px - 0.75 < catX + 0.5 && pz - 0.77 > zBase) pillarClear = Math.min(pillarClear, pz - 0.77 - zBase);
+  }
+  return { zBase, wallClear, pillarClear, clear: Math.min(wallClear, pillarClear) };
+}
+const appW = approachClearance(cW), appE = approachClearance(cE);
 
 // ===== SATS: hide-spot generation (same generateHideSpots the game uses) =====
 const colBox = (x, z, hx, hz, minY, maxY) => ({ minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz, minY, maxY });
@@ -159,7 +174,7 @@ const coverColliders = [
   ...[[-ring,-ring],[ring,-ring],[-ring,0],[ring,0],[-ring,6],[ring,6]].map(([x, z]) => colBox(x, z, 0.6, 0.6, 0, 6)),
   ...crates.map((c) => colBox(c.x, c.z, 0.55, 0.55, c.y || 0, (c.y || 0) + 1.0)),
   ...terms.map((t) => colBox(t.x, t.z, 0.4, 0.4, 0, 1.2)),
-  ...[cW, cE].map((x) => { const b = colBox(x, 0, catHalfW, catHalfLen, 0, DECK_Y); b.maxZ = catHalfLen - 0.35; return b; }),
+  ...[cW, cE].map((x) => { const b = colBox(x, DECK_Z, catHalfW, catHalfLen, 0, DECK_Y); b.maxZ = DECK_Z + catHalfLen - 0.35; return b; }),
   colBox(0, -5.45, 1.9, 1.75, 0, 3.4),
 ];
 const cover = {
@@ -167,7 +182,7 @@ const cover = {
   pillars: [[-ring,-ring],[ring,-ring],[-ring,0],[ring,0],[-ring,6],[ring,6]].map(([x, z]) => ({ x, z, r: 0.75 })),
   crates: crates.map((c) => ({ x: c.x, z: c.z, r: 0.55, y: c.y || 0 })),
   terminals: terms.map((t) => ({ x: t.x, z: t.z, r: 0.4 })),
-  decks: [cW, cE].map((x) => ({ minX: x - catHalfW, maxX: x + catHalfW, minZ: -catHalfLen, maxZ: catHalfLen, y: DECK_Y })),
+  decks: [cW, cE].map((x) => ({ minX: x - catHalfW, maxX: x + catHalfW, minZ: DECK_Z - catHalfLen, maxZ: DECK_Z + catHalfLen, y: DECK_Y })),
   vault: colBox(0, -5.45, 1.9, 1.75, 0, 3.4),
   colliders: coverColliders,
 };
@@ -208,6 +223,10 @@ console.log('\n=== DECK UNDERSIDE ===');
 console.log(`  from below (feet@0): pushed to (${f2(underPush.x)},${f2(underPush.z)}) blocked=${blockedFromBelow}`);
 console.log(`  on top (feet@DECK_Y): stays walkable=${walkableOnTop}`);
 
+console.log('\n=== MEZZANINE MOVE (deck+stair translated so far end meets the -Z wall) ===');
+console.log(`  deck Z[${f2(DECK_Z - catHalfLen)}, ${f2(DECK_Z + catHalfLen)}]  far (-Z) end vs wall -7.0: ${f2(DECK_Z - catHalfLen)} (Δ ${f2(Math.abs((DECK_Z - catHalfLen) - -half))})`);
+console.log(`  stair foot z=${f2(appW.zBase)}; approach clearance -> west ${f2(appW.clear)}m (wall ${f2(appW.wallClear)}, pillar ${appW.pillarClear === Infinity ? 'none' : f2(appW.pillarClear)}); east ${f2(appE.clear)}m`);
+
 console.log('\n=== SATS (seed ' + HUNT_SEED + ') ===');
 console.log(`  spawned: ${hideSpots.length}/${SAT_COUNT}`);
 console.log(`  rest on real surface: ${surfCount}/${hideSpots.length}  (below floor: ${belowFloor})`);
@@ -229,6 +248,8 @@ const checks = [
   [hits.length === 0, 'no unintended prop/structure intersections'],
   [blockedFromBelow, 'deck blocks upward pass from below'],
   [walkableOnTop, 'deck top stays walkable'],
+  [appW.clear >= 1.0 && appE.clear >= 1.0, `each staircase has ≥1m walkable approach (west ${f2(appW.clear)}m, east ${f2(appE.clear)}m)`],
+  [Math.abs((DECK_Z - catHalfLen) - -half) < 0.05, `deck far (-Z) end meets the wall (${f2(DECK_Z - catHalfLen)} ≈ -${half})`],
 ];
 for (const [ok, msg] of checks) console.log(`  [${ok ? 'PASS' : 'FAIL'}] ${msg}`);
 const allPass = checks.every(([ok]) => ok);

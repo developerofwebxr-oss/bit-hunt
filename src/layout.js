@@ -135,6 +135,10 @@ export async function buildLayout(scene) {
   const catHalfW = (cbb.max.x - cbb.min.x) / 2;
   const catHalfLen = (cbb.max.z - cbb.min.z) / 2;
   const catW = -half + catHalfW, catE = half - catHalfW; // outer edge flush to the wall
+  // Slide the WHOLE assembly (deck + stair, rigid) so the deck's far (-Z) end
+  // meets the -Z wall and the staircase points +Z into open floor (walkable
+  // approach). Orientation/size unchanged — pure translation along Z.
+  const DECK_Z = -half + catHalfLen;
   const catProbe = new THREE.Mesh(catBaked.geometry, catBaked.material);
   catProbe.position.set(catW, 0, 0);
   catProbe.updateMatrixWorld(true);
@@ -144,8 +148,8 @@ export async function buildLayout(scene) {
   const junctionH = surfaceYAt(catProbe, catW, catHalfLen - 0.25);
   const zEndOpen = zEndH == null || zEndH <= DECK_Y + 0.12;
   group.add(instanced('catwalk', catBaked, [
-    { x: catW, y: 0, z: 0, ry: 0 },          // west (one section)
-    { x: catE, y: 0, z: 0, ry: Math.PI },     // east (one section)
+    { x: catW, y: 0, z: DECK_Z, ry: 0 },          // west (one section)
+    { x: catE, y: 0, z: DECK_Z, ry: Math.PI },     // east (one section)
   ]));
 
   // ---- Staircases: one per platform, boarding the OPEN +Z end, in-line with the
@@ -153,7 +157,7 @@ export async function buildLayout(scene) {
   // top walkable TREAD (raycast, not the handrail) so it meets DECK_Y flush. ----
   const STAIR_WIDTH = 2 * catHalfW;                // match the deck width
   const STAIR_RUN = DECK_Y * 1.7;                  // scales with DECK_Y (uniform)
-  const STAIR_TOP_Z = catHalfLen;                  // deck open +Z edge
+  const STAIR_TOP_Z = DECK_Z + catHalfLen;         // deck open +Z edge (world)
   const STAIR_Zc = STAIR_TOP_Z + STAIR_RUN / 2;    // run centre; top at deck, base beyond (+Z)
   // raw ascent: which run (Z) end is high? Face that end at the deck (-Z of the stair)
   A.staircase.obj.updateMatrixWorld(true);
@@ -241,14 +245,14 @@ export async function buildLayout(scene) {
   // the ramp boards without a push-out wall.
   for (const catX of [catW, catE]) {
     const b = box(catX, 0, catHalfW, DECK_Y, 0);
-    b.minZ = -catHalfLen; b.maxZ = catHalfLen - 0.35; // full footprint, entry edge inset
+    b.minZ = DECK_Z - catHalfLen; b.maxZ = DECK_Z + catHalfLen - 0.35; // full footprint, +Z entry edge inset
     colliders.push(b);
   }
 
   // Walkable deck surfaces (west + east) at DECK_Y — reachable only via the stairs.
   const surfaces = [
-    { minX: catW - catHalfW, maxX: catW + catHalfW, minZ: -catHalfLen, maxZ: catHalfLen, y: DECK_Y },
-    { minX: catE - catHalfW, maxX: catE + catHalfW, minZ: -catHalfLen, maxZ: catHalfLen, y: DECK_Y },
+    { minX: catW - catHalfW, maxX: catW + catHalfW, minZ: DECK_Z - catHalfLen, maxZ: DECK_Z + catHalfLen, y: DECK_Y },
+    { minX: catE - catHalfW, maxX: catE + catHalfW, minZ: DECK_Z - catHalfLen, maxZ: DECK_Z + catHalfLen, y: DECK_Y },
   ];
 
   // Walk-ramps (one per staircase): run along Z, base (y=0) at the +Z end, top

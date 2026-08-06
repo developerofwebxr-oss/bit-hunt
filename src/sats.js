@@ -74,8 +74,10 @@ export function generateHideSpots(seed, cover) {
   cover.decks.forEach((dk) => {                                            // up on the decks, wall-side
     const dcx = (dk.minX + dk.maxX) / 2;
     const wallX = dcx < 0 ? dk.minX + 0.35 : dk.maxX - 0.35;
-    cand.push({ x: wallX, y: dk.y, z: (rng() - 0.5) * 1.2, type: 'deck' });
-    cand.push({ x: wallX, y: dk.y, z: 1.4 + rng() * 0.8, type: 'deck' });
+    // deck-relative Z so on-deck spots ride WITH the deck wherever it sits
+    const dcz = (dk.minZ + dk.maxZ) / 2, dhz = (dk.maxZ - dk.minZ) / 2 - 0.4;
+    cand.push({ x: wallX, y: dk.y, z: dcz + (rng() - 0.5) * dhz, type: 'deck' });
+    cand.push({ x: wallX, y: dk.y, z: dcz + (rng() - 0.5) * dhz, type: 'deck' });
   });
 
   // validate (raise 0.12 off the surface so a floor sat's own resting surface
