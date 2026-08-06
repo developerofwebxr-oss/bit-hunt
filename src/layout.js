@@ -212,7 +212,10 @@ export async function buildLayout(scene) {
     { x: 4.0, z: 3.2, ry: 0.9 },
     { x: catE, y: DECK_Y, z: -1.5, ry: 0.3 }, // one up on the (grounded) east deck
   ];
-  group.add(instanced('crates', bake(A.crate.obj), crateT));
+  const crateBaked = bake(A.crate.obj);
+  crateBaked.geometry.computeBoundingBox();
+  const crateH = crateBaked.geometry.boundingBox.max.y - crateBaked.geometry.boundingBox.min.y; // real mesh height (walkable top)
+  group.add(instanced('crates', crateBaked, crateT));
 
   // Terminals kept clear of the wall-hugging staircases (x ≈ ±6) and pillars.
   const termT = [
@@ -220,7 +223,10 @@ export async function buildLayout(scene) {
     { x: 3.4, z: -2.6, ry: -1.2 },             // moved clear of pillar (4.6,-4.6)
     { x: -3.0, z: -4.0, ry: 2.2 },
   ];
-  group.add(instanced('terminals', bake(A.terminal.obj), termT));
+  const termBaked = bake(A.terminal.obj);
+  termBaked.geometry.computeBoundingBox();
+  const termH = termBaked.geometry.boundingBox.max.y - termBaked.geometry.boundingBox.min.y; // real mesh height (walkable top)
+  group.add(instanced('terminals', termBaked, termT));
 
   // ---- Sat-coin prototype: the hunt sats (sats.js) clone this; NOT added here. ----
   const coinObj = A.coin.obj;
@@ -233,9 +239,12 @@ export async function buildLayout(scene) {
     ({ minX: x - half, maxX: x + half, minZ: z - half, maxZ: z + half, minY: base, maxY: top });
 
   const colliders = [];
-  for (const [x, z] of pPos) colliders.push(box(x, z, 0.6, pillarH));      // pillars
-  for (const t of crateT) colliders.push(box(t.x, t.z, 0.55, (t.y || 0) + 1.0, t.y || 0)); // crates
-  for (const t of termT) colliders.push(box(t.x, t.z, 0.4, 1.2));          // terminals
+  for (const [x, z] of pPos) colliders.push(box(x, z, 0.6, pillarH));      // pillars (pure blockers)
+  // Low props get a WALKABLE TOP: collider height = the REAL mesh top (raycast-
+  // matched), and walkableTop lets the ground-height system land you on it (jump
+  // onto a crate; from on top, hop again to clear). Sides still block below the top.
+  for (const t of crateT) { const b = box(t.x, t.z, 0.55, (t.y || 0) + crateH, t.y || 0); b.walkableTop = true; colliders.push(b); }
+  for (const t of termT)  { const b = box(t.x, t.z, 0.4, (t.y || 0) + termH, t.y || 0);  b.walkableTop = true; colliders.push(b); }
   // (mining rigs removed — no colliders either, so nothing invisible to bump)
 
   // Deck underside collision: each platform footprint is SOLID from floor to

@@ -172,8 +172,8 @@ const appW = approachClearance(cW), appE = approachClearance(cE);
 const colBox = (x, z, hx, hz, minY, maxY) => ({ minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz, minY, maxY });
 const coverColliders = [
   ...[[-ring,-ring],[ring,-ring],[-ring,0],[ring,0],[-ring,6],[ring,6]].map(([x, z]) => colBox(x, z, 0.6, 0.6, 0, 6)),
-  ...crates.map((c) => colBox(c.x, c.z, 0.55, 0.55, c.y || 0, (c.y || 0) + 1.0)),
-  ...terms.map((t) => colBox(t.x, t.z, 0.4, 0.4, 0, 1.2)),
+  ...crates.map((c) => colBox(c.x, c.z, 0.55, 0.55, c.y || 0, (c.y || 0) + cD.y)), // real mesh height (matches game walkable-top colliders)
+  ...terms.map((t) => colBox(t.x, t.z, 0.4, 0.4, 0, tD.y)),
   ...[cW, cE].map((x) => { const b = colBox(x, DECK_Z, catHalfW, catHalfLen, 0, DECK_Y); b.maxZ = DECK_Z + catHalfLen - 0.35; return b; }),
   colBox(0, -5.45, 1.9, 1.75, 0, 3.4),
 ];

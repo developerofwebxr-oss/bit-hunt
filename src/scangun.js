@@ -15,7 +15,9 @@ import * as THREE from 'three';
 import { loadRaw } from './assets.js';
 
 // ---- measured gun-local coordinates (raycast against the decimated GLB) ----
-const SCREEN = { x: 0, y: 0.335, z: 0.487, w: 0.10, h: 0.125, tilt: 0.23 };
+// screen face RECEDES as it rises (raycast: y0.30→z0.484, y0.40→z0.461, slope ≈ -0.23),
+// so the overlay's top must tilt BACK (-Z) to lie flush — negative rotation.x.
+const SCREEN = { x: 0, y: 0.335, z: 0.480, w: 0.10, h: 0.125, tilt: -0.23 };
 const LIGHTS = { x: 0, y: 0.408, z0: -0.08, z1: 0.26, n: 8 };
 const HOOP   = { x: 0, y: 0.50, z: -0.32, r: 0.052, tube: 0.006 };
 const MUZZLE = { x: 0, y: 0.30, z: -0.60 };

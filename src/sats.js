@@ -123,6 +123,7 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
   });
 
   let active = false;
+  const caught = new Set();   // indices removed from the hunt (shoot-to-return, next phase)
   const TRAVEL = 1.4; // s per sat
 
   function burst() {
@@ -140,6 +141,7 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
   }
   function reset() {
     active = false;
+    caught.clear();
     vaultApi?.closeVault?.();
     sats.forEach((s) => { s.mesh.visible = false; s.state = 'idle-vault'; s.t = 0; });
   }
@@ -164,5 +166,22 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
     }
   }
 
-  return { burst, reset, update, get spots() { return spots; }, get isActive() { return active; } };
+  return {
+    burst, reset, update,
+    get spots() { return spots; },
+    get isActive() { return active; },
+    // still-hidden, uncaught sats as world positions — the scanner's target set.
+    // Empty until burst (sats are in the vault), so the gun stays silent at rest.
+    get targets() {
+      const out = [];
+      for (let i = 0; i < sats.length; i++) {
+        const s = sats[i];
+        if (s.state === 'hidden' && !caught.has(i)) out.push({ x: s.spot.x, y: s.spot.y, z: s.spot.z });
+      }
+      return out;
+    },
+    markCaught(i) { caught.add(i); },       // wired to shoot-to-return next phase
+    resetCaught() { caught.clear(); },
+    get caughtCount() { return caught.size; },
+  };
 }

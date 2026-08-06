@@ -106,6 +106,21 @@ pauseMenu = createPauseMenu({
 // on-screen menu button (flat/mobile) → same as Left-X
 document.getElementById('btn-pause')?.addEventListener('click', () => pauseMenu.toggle());
 
+// ---- scanner sample: aim origin+dir (gun ray) + still-hidden sat positions ----
+const _so = new THREE.Vector3(), _sd = new THREE.Vector3(), _sm = new THREE.Matrix4();
+function scannerSample() {
+  if (renderer.xr.isPresenting) {
+    const c = interaction.getController('right');   // gun rides this controller
+    c.getWorldPosition(_so);
+    _sm.identity().extractRotation(c.matrixWorld);
+    _sd.set(0, 0, -1).applyMatrix4(_sm).normalize();
+  } else {
+    camera.getWorldPosition(_so);                    // flat: aim = where you look (crosshair)
+    camera.getWorldDirection(_sd);
+  }
+  return { ox: _so.x, oy: _so.y, oz: _so.z, dx: _sd.x, dy: _sd.y, dz: _sd.z, targets: sats ? sats.targets : [] };
+}
+
 // ---- gun mounting: right controller in XR, bottom-right viewmodel in flat ----
 function mountGun(mode) {
   if (!scangun) return;
@@ -215,7 +230,7 @@ renderer.setAnimationLoop(() => {
   vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
   vaultApi?.updateVault(dt);
   sats?.update(dt, clock.elapsedTime);
-  scanner.update(dt);                                    // advance the signal seam...
+  scanner.update(dt, scannerSample());                   // advance the signal seam (real: aim×proximity)...
   scangun?.update(dt, clock.elapsedTime, paused);        // ...then drive all gun feedback
   if (renderer.xr.isPresenting) {
     renderer.render(scene, camera); // XR: direct path, no post
@@ -251,7 +266,7 @@ window.__sat = {
     vignette.update(false, dt);
     vaultApi?.updateVault(dt);
     sats?.update(dt, this._t);
-    scanner.update(dt);
+    scanner.update(dt, scannerSample());
     scangun?.update(dt, this._t, paused);
     if (renderer.xr.isPresenting) renderer.render(scene, camera); else postfx.render();
   },

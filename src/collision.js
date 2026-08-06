@@ -14,6 +14,12 @@ export function createCollision() {
   let bounds = null;     // { half } room half-size; null = no clamp (AR)
   const PLAYER_R = 0.35;
   const PLAYER_H = 1.6;
+  // Step-up: how far below a walkable prop top the feet may be and still "mount" it.
+  // resolveXZ stops blocking (lets you move over the footprint) and groundHeight
+  // lifts you, using the SAME value so the two agree on on-top vs blocked. Sized so
+  // a normal hop (~0.69 m apex) reliably clears a ~0.67 m crate: you enter the
+  // footprint well before the apex instead of only in a 2 cm window at the very top.
+  const STEP_UP = 0.34;
 
   function setBounds(half) { bounds = { half }; }
   function clearBounds() { bounds = null; }
@@ -26,9 +32,12 @@ export function createCollision() {
   function resolveXZ(pos, feetY) {
     const r = PLAYER_R;
     for (const b of boxes) {
-      // vertical overlap?
-      if (feetY >= b.maxY - 0.05) continue;          // standing on top / above
-      if (feetY + PLAYER_H <= b.minY) continue;       // entirely below
+      // vertical overlap? A walkable-top prop lets you move over its footprint once
+      // feet are within STEP_UP of the top (so a hop mounts it); pure blockers use a
+      // tight 5 cm margin (only "above" when genuinely standing on top).
+      const topSkip = b.walkableTop ? STEP_UP : 0.05;
+      if (feetY >= b.maxY - topSkip) continue;         // standing on / mounting the top
+      if (feetY + PLAYER_H <= b.minY) continue;        // entirely below
       // nearest point on box to the circle centre
       const cx = Math.max(b.minX, Math.min(pos.x, b.maxX));
       const cz = Math.max(b.minZ, Math.min(pos.z, b.maxZ));
@@ -77,6 +86,14 @@ export function createCollision() {
       if (x >= s.minX && x <= s.maxX && z >= s.minZ && z <= s.maxZ) {
         if (currentY > s.y - 1.0) g = Math.max(g, s.y);
       }
+    }
+    // low props with walkable tops (crates, terminals): land/stand on the top once
+    // you're at/above it (cleared its lip by jumping). Below the top, resolveXZ has
+    // already pushed you out of the footprint, so this never lifts you from the side.
+    for (const b of boxes) {
+      if (!b.walkableTop) continue;
+      if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
+      if (currentY >= b.maxY - STEP_UP) g = Math.max(g, b.maxY);
     }
     return g;
   }
