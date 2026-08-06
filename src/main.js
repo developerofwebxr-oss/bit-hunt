@@ -17,10 +17,14 @@ import { createEnvironment } from './environment.js';
 import { createPauseMenu } from './pausemenu.js';
 import { createVignette } from './vignette.js';
 import { createSats } from './sats.js';
+import { createScanner } from './scanner.js';
+import { createScangun } from './scangun.js';
 import { comfort } from './comfort.js';
 
 const HUNT_SEED = 1337; // single seed -> swap for a server seed in v4 (multiplayer)
 let sats = null;
+const scanner = createScanner();   // the single scanner-signal seam (stubbed this phase)
+let scangun = null;
 
 const EYE_HEIGHT = 1.6;
 const app = document.getElementById('app');
@@ -69,7 +73,8 @@ let pauseMenu = null; // set after modeswitcher (needs its exit path)
 const interaction = createInteraction({
   renderer, scene, camera, input, canvas, isPaused: () => !!pauseMenu?.isOpen(),
 });
-interaction.setFireHook((hand) => console.log(`[fire] trigger (${hand}) — placeholder, no gun yet`));
+// Trigger/click/tap = fire() stub: muzzle flash + hoop pulse, NO shoot-to-return yet.
+interaction.setFireHook(() => { scangun?.flash(); scangun?.resumeAudio(); });
 
 let environment = null;
 let currentMode = 'Screen';
@@ -90,6 +95,7 @@ const modeswitcher = createModeSwitcher({
       renderer.toneMapping = THREE.NoToneMapping;  // composer/OutputPass handles it
       scene.background = new THREE.Color(0x05100b);
     }
+    mountGun(mode);                                // hand-mount in XR, viewmodel in flat
     environment?.applyMode(mode);                  // AR shell-off + collision bounds
   },
 });
@@ -100,6 +106,14 @@ pauseMenu = createPauseMenu({
 // on-screen menu button (flat/mobile) → same as Left-X
 document.getElementById('btn-pause')?.addEventListener('click', () => pauseMenu.toggle());
 
+// ---- gun mounting: right controller in XR, bottom-right viewmodel in flat ----
+function mountGun(mode) {
+  if (!scangun) return;
+  scangun.unmount();
+  if (mode === 'VR' || mode === 'AR') scangun.mountHand(interaction.getController('right'));
+  else scangun.mountFlat(camera);
+}
+
 // ---- Start-Hunt trigger (placeholder: button toggles burst/reset; H / R keys) ----
 function triggerHunt() { sats && (sats.isActive ? sats.reset() : sats.burst()); }
 document.getElementById('btn-hunt')?.addEventListener('click', triggerHunt);
@@ -107,6 +121,19 @@ window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   if (e.code === 'KeyH') triggerHunt();
   else if (e.code === 'KeyR') sats?.reset();
+  // ---- scanner-signal DEBUG (stub phase): sweep the seam 0→1 by hand ----
+  else if (e.code === 'Backslash') { const on = scanner.toggleSweep(); modeswitcher.setStatus(`scanner sweep: ${on ? 'ON (auto 0→1)' : 'off (idle)'}`); }
+  else if (e.code === 'BracketRight') modeswitcher.setStatus(`scanner: ${Math.round(scanner.stepManual(+0.1) * 100)}%`);
+  else if (e.code === 'BracketLeft') modeswitcher.setStatus(`scanner: ${Math.round(scanner.stepManual(-0.1) * 100)}%`);
+  else if (e.code === 'KeyM') { scangun?.setMuted(!scangun.muted); modeswitcher.setStatus(`tick audio: ${scangun?.muted ? 'muted' : 'on'}`); }
+});
+// flat/mobile: click/tap = fire() stub (muzzle flash + hoop pulse), matching VR trigger.
+// Also unlocks WebAudio for the Geiger ticks on the first gesture.
+canvas.addEventListener('pointerdown', (e) => {
+  if (e.button !== undefined && e.button !== 0) return;   // primary only
+  if (renderer.xr.isPresenting || pauseMenu?.isOpen()) return;
+  scangun?.resumeAudio();
+  scangun?.flash();
 });
 
 // ---- build the world ----
@@ -137,8 +164,14 @@ Promise.all([
     };
     sats = createSats({ scene, vaultApi: v, coinObj: layout.coinObj, cover, seed: HUNT_SEED });
     window.__sat.sats = sats;
-    modeswitcher.setStatus('ready · press Start Hunt (H)');
-    reportStats();
+
+    // ---- Scanner gun: held weapon/scanner with live screen + tick effects ----
+    return createScangun({ scanner }).then((g) => {
+      scangun = g;                                 // exposed via window.__sat getter
+      mountGun(currentMode);                       // viewmodel now; re-mounts on XR entry
+      modeswitcher.setStatus('ready · press Start Hunt (H)');
+      reportStats();
+    });
   })
   .catch((err) => {
     modeswitcher.setStatus('load error: ' + (err.message || err));
@@ -182,6 +215,8 @@ renderer.setAnimationLoop(() => {
   vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
   vaultApi?.updateVault(dt);
   sats?.update(dt, clock.elapsedTime);
+  scanner.update(dt);                                    // advance the signal seam...
+  scangun?.update(dt, clock.elapsedTime, paused);        // ...then drive all gun feedback
   if (renderer.xr.isPresenting) {
     renderer.render(scene, camera); // XR: direct path, no post
   } else {
@@ -192,7 +227,8 @@ renderer.setAnimationLoop(() => {
 // ---- expose for headless verification ----
 window.__sat = {
   scene, rig, camera, renderer, controls, THREE,
-  input, locomotion, collision, comfort, interaction,
+  input, locomotion, collision, comfort, interaction, scanner,
+  get scangun() { return scangun; },
   get vault() { return vaultApi; },
   get pauseMenu() { return pauseMenu; },
   // drive one logic frame manually (for headless verification when the tab is
@@ -203,6 +239,21 @@ window.__sat = {
     const paused = !!pauseMenu?.isOpen();
     if (!paused) { if (!modeswitcher.isInSession()) controls.update(); locomotion.update(dt); }
     interaction.update();
+  },
+  // full logic+render frame (headless verification when rAF is throttled): mirrors
+  // the render loop body so the framebuffer reflects the gun/screen/effects live.
+  // Advances a synthetic clock so time-based effects animate under synchronous driving.
+  _t: 0,
+  frame(dt = 0.016) {
+    this._t += dt;
+    this.step(dt);
+    const paused = !!pauseMenu?.isOpen();
+    vignette.update(false, dt);
+    vaultApi?.updateVault(dt);
+    sats?.update(dt, this._t);
+    scanner.update(dt);
+    scangun?.update(dt, this._t, paused);
+    if (renderer.xr.isPresenting) renderer.render(scene, camera); else postfx.render();
   },
   // place the camera for a screenshot: eye -> target (world coords)
   view(ex, ey, ez, tx, ty, tz) {

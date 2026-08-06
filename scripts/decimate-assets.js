@@ -30,6 +30,10 @@ const PLAN = {
   'main-empty-vault.glb':     { target: 12000, error: 0.02, lockBorder: true  },
   'main-vault-door.glb':      { target: 3000,  error: 0.05, lockBorder: false },
   'bitcoin-sat-coin.glb':     { target: 400,   error: 0.20, lockBorder: false },
+  // scangun: functional regions (screen/lights/hoop) are rebuilt as clean
+  // primitives in code, so the baked shell can collapse fairly hard; keep enough
+  // to read as a gun body. error moderate so the silhouette survives.
+  'scangun.glb':              { target: 3000,  error: 0.08, lockBorder: false },
 };
 
 const io = new NodeIO()

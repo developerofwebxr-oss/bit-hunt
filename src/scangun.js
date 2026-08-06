@@ -1,0 +1,210 @@
+// Scangun — the player's held scanner/weapon.
+//
+// The GLB is a single fused, baked mesh (one material, one primitive): the
+// screen, indicator lights and crosshair hoop are all painted into one albedo,
+// so NONE of them are separately addressable on the mesh itself. Rather than
+// try to carve triangles out of image-to-3D soup, we treat the baked GLB as a
+// static SHELL and drive every live region with clean primitive OVERLAYS
+// parented at measured gun-local coordinates:
+//   • screen  → a plane with a live CanvasTexture (own material, emissive/unlit)
+//   • lights  → a row of individually-addressable emissive segments
+//   • hoop    → an emissive torus + crosshair bars over the baked reticle
+//   • muzzle  → a flash sprite (fire() stub only; no shoot-to-return logic)
+// Every one of them reads from the single scanner signal seam.
+import * as THREE from 'three';
+import { loadRaw } from './assets.js';
+
+// ---- measured gun-local coordinates (raycast against the decimated GLB) ----
+const SCREEN = { x: 0, y: 0.335, z: 0.487, w: 0.10, h: 0.125, tilt: 0.23 };
+const LIGHTS = { x: 0, y: 0.408, z0: -0.08, z1: 0.26, n: 8 };
+const HOOP   = { x: 0, y: 0.50, z: -0.32, r: 0.052, tube: 0.006 };
+const MUZZLE = { x: 0, y: 0.30, z: -0.60 };
+const GREEN = 0x19ff9b;
+
+export async function createScangun({ scanner }) {
+  const shell = await loadRaw('scangun.glb');
+  const gun = new THREE.Group();
+  gun.name = 'scangun';
+  gun.add(shell);
+
+  // ---------- live screen (CanvasTexture) ----------
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  const screenTex = new THREE.CanvasTexture(canvas);
+  screenTex.colorSpace = THREE.SRGBColorSpace;
+  screenTex.anisotropy = 4;
+  const screenMat = new THREE.MeshBasicMaterial({ map: screenTex, toneMapped: false });
+  const screen = new THREE.Mesh(new THREE.PlaneGeometry(SCREEN.w, SCREEN.h), screenMat);
+  screen.position.set(SCREEN.x, SCREEN.y, SCREEN.z);
+  screen.rotation.x = SCREEN.tilt; // top tips back to match the angled rear face
+  screen.frustumCulled = false;
+  gun.add(screen);
+
+  // ---------- indicator light row ----------
+  const lights = [];
+  const litColor = new THREE.Color(GREEN);
+  const seg = (LIGHTS.z1 - LIGHTS.z0) / LIGHTS.n;
+  for (let i = 0; i < LIGHTS.n; i++) {
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0x0a2418, emissive: GREEN, emissiveIntensity: 0.05,
+      metalness: 0.2, roughness: 0.5, toneMapped: false,
+    });
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.006, seg * 0.62), mat);
+    m.position.set(LIGHTS.x, LIGHTS.y, LIGHTS.z0 + seg * (i + 0.5));
+    m.frustumCulled = false;
+    gun.add(m);
+    lights.push(m);
+  }
+
+  // ---------- crosshair hoop overlay (emissive; pulses with signal) ----------
+  const hoopMat = new THREE.MeshBasicMaterial({ color: GREEN, toneMapped: false, transparent: true, opacity: 0.9 });
+  const hoop = new THREE.Group();
+  hoop.position.set(HOOP.x, HOOP.y, HOOP.z);
+  const torus = new THREE.Mesh(new THREE.TorusGeometry(HOOP.r, HOOP.tube, 8, 28), hoopMat);
+  hoop.add(torus);
+  const barGeo = new THREE.BoxGeometry(HOOP.r * 2, HOOP.tube * 1.4, HOOP.tube * 1.4);
+  const barH = new THREE.Mesh(barGeo, hoopMat);
+  const barV = new THREE.Mesh(barGeo, hoopMat); barV.rotation.z = Math.PI / 2;
+  hoop.add(barH, barV);
+  hoop.children.forEach((c) => (c.frustumCulled = false));
+  gun.add(hoop);
+
+  // ---------- muzzle flash (fire() stub) ----------
+  const flashMat = new THREE.MeshBasicMaterial({
+    color: 0xbfffe0, toneMapped: false, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 10), flashMat);
+  flash.position.set(MUZZLE.x, MUZZLE.y, MUZZLE.z);
+  flash.scale.set(1, 1, 1.6);
+  flash.frustumCulled = false;
+  gun.add(flash);
+
+  // ---------- audio: soft synthesized Geiger tick ----------
+  let audioCtx = null, noiseBuf = null, muted = false, tickAcc = 0, tickIdx = 0;
+  function resumeAudio() {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return; }
+      const dur = 0.03, n = Math.floor(audioCtx.sampleRate * dur);
+      noiseBuf = audioCtx.createBuffer(1, n, audioCtx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < n; i++) { const e = 1 - i / n; d[i] = (Math.random() * 2 - 1) * e * e; }
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  }
+  function playTick() {
+    if (!audioCtx || !noiseBuf || audioCtx.state !== 'running') return;
+    const src = audioCtx.createBufferSource(); src.buffer = noiseBuf;
+    const bp = audioCtx.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.value = 1500 + ((tickIdx++ * 137) % 700); bp.Q.value = 1.2;
+    const g = audioCtx.createGain(); g.gain.value = 0.06;
+    src.connect(bp).connect(g).connect(audioCtx.destination); src.start();
+  }
+
+  // ---------- drawing the screen (throttled) ----------
+  let sweepAngle = 0, drawAcc = 0, blipSeed = 0;
+  function drawScreen(signal, time) {
+    const W = 256, H = 256, cx = 128, cy = 104, R = 96;
+    ctx.fillStyle = '#02160d'; ctx.fillRect(0, 0, W, H);
+    // radar rings + cross
+    ctx.strokeStyle = 'rgba(25,255,155,0.22)'; ctx.lineWidth = 2;
+    for (const r of [R * 0.4, R * 0.7, R]) { ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke(); }
+    ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
+    // sweep wedge + line
+    ctx.fillStyle = 'rgba(25,255,155,0.10)';
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, sweepAngle - 0.6, sweepAngle); ctx.closePath(); ctx.fill();
+    const ex = cx + Math.cos(sweepAngle) * R, ey = cy + Math.sin(sweepAngle) * R;
+    const grd = ctx.createLinearGradient(cx, cy, ex, ey);
+    grd.addColorStop(0, 'rgba(25,255,155,0.95)'); grd.addColorStop(1, 'rgba(25,255,155,0)');
+    ctx.strokeStyle = grd; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
+    // signal blip — closer to centre + bigger + hotter as signal rises
+    const ba = sweepAngle - 0.35 + blipSeed;
+    const br = R * (0.28 + 0.55 * (1 - signal));
+    const bx = cx + Math.cos(ba) * br, by = cy + Math.sin(ba) * br;
+    const pulse = 0.5 + 0.5 * Math.sin(time * (2 + signal * 16));
+    ctx.fillStyle = `rgba(255,${Math.round(120 + 120 * signal)},60,${(0.35 + 0.6 * signal).toFixed(2)})`;
+    ctx.beginPath(); ctx.arc(bx, by, 3 + 9 * signal * pulse, 0, Math.PI * 2); ctx.fill();
+    // proximity meter
+    const bw = W - 40, bx0 = 20, by0 = H - 30;
+    ctx.strokeStyle = 'rgba(25,255,155,0.5)'; ctx.lineWidth = 2; ctx.strokeRect(bx0, by0, bw, 16);
+    ctx.fillStyle = `rgb(${Math.round(50 + 205 * signal)},255,${Math.round(120 * (1 - signal))})`;
+    ctx.fillRect(bx0 + 2, by0 + 2, (bw - 4) * signal, 12);
+    ctx.fillStyle = 'rgba(25,255,155,0.85)'; ctx.font = 'bold 15px monospace';
+    ctx.fillText('SIGNAL ' + Math.round(signal * 100), bx0, by0 - 7);
+    screenTex.needsUpdate = true;
+  }
+
+  // ---------- per-frame drive ----------
+  let flashT = 0; const FLASH_DUR = 0.12;
+  let mode = 'flat', swayT = 0;
+  const baseState = { pos: new THREE.Vector3(), quat: new THREE.Quaternion(), scale: 1 };
+
+  function update(dt, time, paused = false) {
+    const signal = scanner.signal;
+    // screen sweep advances faster with signal; redraw ~12fps
+    sweepAngle += dt * (2 + signal * 11);
+    drawAcc += dt;
+    if (drawAcc >= 1 / 12) { blipSeed = Math.sin(time * 0.37) * 0.5; drawScreen(signal, time); drawAcc = 0; }
+    // indicator lights fill progressively
+    const filled = signal * LIGHTS.n;
+    for (let i = 0; i < LIGHTS.n; i++) {
+      const on = Math.max(0, Math.min(1, filled - i)); // partial on the boundary light
+      const m = lights[i].material;
+      m.emissiveIntensity = 0.05 + on * 2.2;
+      m.color.copy(litColor).multiplyScalar(0.1 + on * 0.9);
+    }
+    // hoop pulse — rate follows signal
+    const pulse = 0.5 + 0.5 * Math.sin(time * Math.PI * (1 + signal * 9));
+    hoopMat.opacity = 0.35 + 0.55 * pulse + (flashT > 0 ? 0.4 : 0);
+    const hs = 1 + 0.06 * pulse + (flashT > 0 ? 0.15 : 0);
+    hoop.scale.setScalar(hs);
+    // muzzle flash decay
+    if (flashT > 0) { flashT -= dt; flashMat.opacity = Math.max(0, flashT / FLASH_DUR); }
+    // audio ticks — rate rises with signal; skip when muted/paused/near-silent
+    if (!muted && !paused && signal > 0.04) {
+      tickAcc += dt;
+      const interval = 1 / scanner.ticksPerSec;
+      let guard = 0;
+      while (tickAcc >= interval && guard++ < 4) { playTick(); tickAcc -= interval; }
+    } else tickAcc = 0;
+    // subtle idle sway in flat viewmodel
+    if (mode === 'flat') {
+      swayT += dt;
+      gun.position.copy(baseState.pos);
+      gun.position.x += Math.sin(swayT * 1.1) * 0.004;
+      gun.position.y += Math.sin(swayT * 1.7) * 0.003;
+      gun.quaternion.copy(baseState.quat);
+      gun.rotateZ(Math.sin(swayT * 0.9) * 0.01);
+    }
+  }
+
+  function doFlash() { flashT = FLASH_DUR; }
+
+  // ---------- mounting ----------
+  function mountFlat(camera) {
+    mode = 'flat';
+    camera.add(gun);
+    gun.scale.setScalar(0.32);
+    gun.position.set(0.125, -0.135, -0.30);      // bottom-right viewmodel, screen readable
+    gun.rotation.set(0.11, -0.16, 0);            // muzzle-up + inward yaw tilts screen toward eye
+    baseState.pos.copy(gun.position);
+    baseState.quat.copy(gun.quaternion);
+  }
+  function mountHand(controller) {
+    mode = 'vr';
+    controller.add(gun);
+    gun.scale.setScalar(0.30);
+    // grip (local ~0,0,0.28) sits near the controller origin; muzzle points -Z (aim ray)
+    gun.position.set(0, -0.02, -0.05);
+    gun.rotation.set(0, 0, 0);
+  }
+  function unmount() { if (gun.parent) gun.parent.remove(gun); }
+
+  return {
+    object: gun,
+    update, flash: doFlash, resumeAudio,
+    mountFlat, mountHand, unmount,
+    setMuted(v) { muted = !!v; }, get muted() { return muted; },
+  };
+}

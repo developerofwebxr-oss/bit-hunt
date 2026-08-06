@@ -85,6 +85,15 @@ export async function loadAsset(key) {
   return normalize(raw, spec.fit, spec.size);
 }
 
+// Load a GLB scene RAW (no normalization / no pivot surgery), so authored
+// pivot + local coordinates are preserved. Used by the scangun, whose overlay
+// primitives are placed against measured gun-local coordinates.
+export async function loadRaw(file) {
+  const scene = await loadGLB(file);
+  scene.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false; } });
+  return scene;
+}
+
 // Load several assets in parallel; returns a map keyed by role.
 export async function loadAssets(keys) {
   const entries = await Promise.all(keys.map(async (k) => [k, await loadAsset(k)]));

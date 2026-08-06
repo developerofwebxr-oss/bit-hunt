@@ -172,5 +172,7 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
     setFireHook(fn) { fireHook = fn || (() => {}); },
     get builderMode() { return builderMode; },
     setLasersVisible(v) { for (const c of controllers) c.userData.line.visible = v; },
+    // the target-ray controller for a hand ('right'/'left') — used to mount the gun
+    getController(hand) { return controllers.find((c) => c.userData.hand === hand) || controllers[0]; },
   };
 }
