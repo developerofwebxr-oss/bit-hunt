@@ -123,8 +123,20 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
   });
 
   let active = false;
-  const caught = new Set();   // indices removed from the hunt (shoot-to-return, next phase)
-  const TRAVEL = 1.4; // s per sat
+  const caught = new Set();   // indices removed from the hunt (returned to the vault)
+  const TRAVEL = 1.4;         // s per sat, vault -> hiding spot (burst)
+  // ---- shoot-to-return tunables (top-of-feature constants) ----
+  const HIT_RADIUS = 0.45;    // generous hunt hit sphere around each sat (m)
+  const MAX_RANGE = 40;       // shot reach (m) — comfortably room-sized
+  const RETURN_TRAVEL = 1.2;  // s for the catch -> vault flight (mirrors the burst tween)
+
+  // green catch flash (one pooled additive sphere, reused per catch)
+  let flashT = 0;
+  const catchFlash = new THREE.Mesh(
+    new THREE.SphereGeometry(0.18, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0x8dffc4, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+  );
+  catchFlash.visible = false; catchFlash.frustumCulled = false; group.add(catchFlash);
 
   function burst() {
     if (active) return;
@@ -142,12 +154,51 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
   function reset() {
     active = false;
     caught.clear();
+    flashT = 0; catchFlash.visible = false;
     vaultApi?.closeVault?.();
+    vaultApi?.resetGlow?.();
     sats.forEach((s) => { s.mesh.visible = false; s.state = 'idle-vault'; s.t = 0; });
+  }
+
+  // Shoot: raycast the shot from the gun (origin + normalized dir). If it reaches a
+  // hidden, uncaught sat within HIT_RADIUS AND has clear line of sight (walls/props
+  // block it), CATCH it — start the return flight and drop it from the hunt. Returns
+  // the caught { index, pos } or null (miss / blocked). LOS reuses the SAME collider
+  // AABBs the scanner occludes with (cover.colliders) — one geometry source.
+  function tryCatch(ox, oy, oz, dx, dy, dz) {
+    const al = Math.hypot(dx, dy, dz) || 1;
+    const ax = dx / al, ay = dy / al, az = dz / al;
+    let best = -1, bestT = Infinity;
+    for (let i = 0; i < sats.length; i++) {
+      const s = sats[i];
+      if (s.state !== 'hidden' || caught.has(i)) continue;
+      const vx = s.spot.x - ox, vy = s.spot.y - oy, vz = s.spot.z - oz;
+      const proj = vx * ax + vy * ay + vz * az;          // distance along ray to closest point
+      if (proj <= 0 || proj > MAX_RANGE) continue;        // behind the muzzle / out of range
+      const perp2 = (vx * vx + vy * vy + vz * vz) - proj * proj; // squared miss distance
+      if (perp2 > HIT_RADIUS * HIT_RADIUS) continue;
+      if (proj < bestT) { bestT = proj; best = i; }        // nearest sat the ray pierces
+    }
+    if (best < 0) return null;
+    const s = sats[best];
+    const a = [ox, oy, oz], b = [s.spot.x, s.spot.y, s.spot.z];
+    if ((cover.colliders || []).some((box) => segHitsBox(a, b, box, 0.02, 0.985))) return null; // wall/prop in the way
+    caught.add(best);                                      // scanner drops it (targets filters caught)
+    s.state = 'returning'; s.t = 0; s.rStart = s.spot.clone();
+    s.arc = 0.5 + s.spot.distanceTo(emit) * 0.12;
+    catchFlash.position.copy(s.spot); flashT = 1; catchFlash.visible = true;
+    return { index: best, pos: s.spot.clone() };
   }
 
   const tmp = new THREE.Vector3();
   function update(dt, time) {
+    // green catch flash: expand + fade over ~0.35s
+    if (flashT > 0) {
+      flashT = Math.max(0, flashT - dt / 0.35);
+      catchFlash.scale.setScalar(0.6 + (1 - flashT) * 3.2);
+      catchFlash.material.opacity = flashT;
+      if (flashT === 0) catchFlash.visible = false;
+    }
     for (const s of sats) {
       if (s.state === 'flying') {
         if (s.delay > 0) { s.delay -= dt; continue; }
@@ -158,6 +209,15 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
         s.mesh.position.copy(tmp);
         s.mesh.rotation.y += dt * 6;
         if (s.t >= 1) { s.state = 'hidden'; s.mesh.position.copy(s.spot); }
+      } else if (s.state === 'returning') {
+        // reverse of the burst: eased arc from the hiding spot back into the vault
+        s.t = Math.min(1, s.t + dt / RETURN_TRAVEL);
+        const e = s.t < 0.5 ? 2 * s.t * s.t : 1 - Math.pow(-2 * s.t + 2, 2) / 2;
+        tmp.lerpVectors(s.rStart, emit, e);
+        tmp.y += Math.sin(Math.PI * s.t) * s.arc;
+        s.mesh.position.copy(tmp);
+        s.mesh.rotation.y += dt * 8;
+        if (s.t >= 1) { s.state = 'returned'; s.mesh.visible = false; vaultApi?.pulseAbsorb?.(caught.size); }
       } else if (s.state === 'hidden') {
         // gentle idle so a found sat reads as a collectible
         s.mesh.position.y = s.spot.y + 0.05 + Math.sin(time * 1.6 + s.phase) * 0.03;
@@ -167,7 +227,7 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
   }
 
   return {
-    burst, reset, update,
+    burst, reset, update, tryCatch,
     get spots() { return spots; },
     get isActive() { return active; },
     // still-hidden, uncaught sats as world positions — the scanner's target set.

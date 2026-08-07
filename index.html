@@ -76,6 +76,13 @@
         text-shadow: 0 0 8px rgba(25, 255, 155, 0.4);
       }
       #badge b { color: var(--green); }
+      #returned { color: var(--green); font-weight: 600; margin-top: 2px; }
+      #returned.bump { animation: returned-bump 0.28s ease-out; }
+      @keyframes returned-bump {
+        0% { transform: scale(1); text-shadow: 0 0 8px rgba(25,255,155,0.4); }
+        40% { transform: scale(1.22); text-shadow: 0 0 16px rgba(25,255,155,0.95); }
+        100% { transform: scale(1); text-shadow: 0 0 8px rgba(25,255,155,0.4); }
+      }
 
       /* Bottom control bar (mode switcher + free-look) */
       #controls {
@@ -267,6 +274,7 @@
       <div id="badge">
         <div>BIT-HUNT · <b id="mode-label">Screen</b></div>
         <div id="status">loading assets…</div>
+        <div id="returned">0 / 21 returned</div>
       </div>
 
       <div id="crosshair"></div>

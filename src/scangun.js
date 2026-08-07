@@ -102,6 +102,19 @@ export async function createScangun({ scanner }) {
     const g = audioCtx.createGain(); g.gain.value = 0.06;
     src.connect(bp).connect(g).connect(audioCtx.destination); src.start();
   }
+  // rising "ding" on a catch — same synthesized style + same mute as the ticks
+  function ding() {
+    if (muted || !audioCtx || audioCtx.state !== 'running') return;
+    const t0 = audioCtx.currentTime;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(620, t0);
+    o.frequency.exponentialRampToValueAtTime(1040, t0 + 0.16);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.14, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
+    o.connect(g).connect(audioCtx.destination); o.start(t0); o.stop(t0 + 0.34);
+  }
 
   // ---------- drawing the screen (throttled) ----------
   let sweepAngle = 0, drawAcc = 0, blipSeed = 0;
@@ -205,7 +218,7 @@ export async function createScangun({ scanner }) {
 
   return {
     object: gun,
-    update, flash: doFlash, resumeAudio,
+    update, flash: doFlash, ding, resumeAudio,
     mountFlat, mountHand, unmount,
     setMuted(v) { muted = !!v; }, get muted() { return muted; },
   };

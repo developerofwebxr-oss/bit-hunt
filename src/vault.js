@@ -119,11 +119,34 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
   const state = { target: 0, current: 0 }; // 0 = closed, 1 = open
   function openVault() { state.target = 1; }
   function closeVault() { state.target = 0; }
+
+  // ---- green absorb feedback: a bright pulse each time a returned sat lands, plus
+  // a cumulative glow that strengthens as more are returned (cheap emissive, no assets) ----
+  const glowMats = [];
+  vault.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+      if (!m) continue;
+      m.emissive = new THREE.Color(0x19ff9b);
+      m.emissiveIntensity = 0;
+      glowMats.push(m);
+    }
+  });
+  let absorbT = 0, glowBase = 0;
+  function pulseAbsorb(count = 0, total = 21) { absorbT = 1; glowBase = Math.min(0.5, (count / total) * 0.5); }
+  function resetGlow() { absorbT = 0; glowBase = 0; for (const m of glowMats) m.emissiveIntensity = 0; }
+
   function updateVault(dt) {
-    if (state.current === state.target) return;
-    const step = (OPEN_SPEED / Math.abs(HINGE_OPEN_ANGLE)) * dt;
-    state.current += Math.sign(state.target - state.current) * Math.min(step, Math.abs(state.target - state.current));
-    hinge.rotation.y = state.current * HINGE_OPEN_ANGLE;
+    // door swing (stays closed for now)
+    if (state.current !== state.target) {
+      const step = (OPEN_SPEED / Math.abs(HINGE_OPEN_ANGLE)) * dt;
+      state.current += Math.sign(state.target - state.current) * Math.min(step, Math.abs(state.target - state.current));
+      hinge.rotation.y = state.current * HINGE_OPEN_ANGLE;
+    }
+    // absorb glow: pulse decays over ~0.5s, sits on the cumulative base
+    if (absorbT > 0) absorbT = Math.max(0, absorbT - dt / 0.5);
+    const e = glowBase + absorbT * 0.9;
+    for (const m of glowMats) m.emissiveIntensity = e;
   }
 
   // ---- collider (vault body AABB in world XZ, base at floor) ----
@@ -134,5 +157,5 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
     minY: 0, maxY: vbox.max.y,
   };
 
-  return { vault, door: doorInner, hinge, hole, size: vsize, collider, openVault, closeVault, updateVault };
+  return { vault, door: doorInner, hinge, hole, size: vsize, collider, openVault, closeVault, updateVault, pulseAbsorb, resetGlow };
 }

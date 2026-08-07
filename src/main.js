@@ -16,9 +16,10 @@ import { createInteraction } from './interaction.js';
 import { createEnvironment } from './environment.js';
 import { createPauseMenu } from './pausemenu.js';
 import { createVignette } from './vignette.js';
-import { createSats } from './sats.js';
+import { createSats, SAT_COUNT } from './sats.js';
 import { createScanner } from './scanner.js';
 import { createScangun } from './scangun.js';
+import { hapticPulse } from './haptics.js';
 import { comfort } from './comfort.js';
 
 const HUNT_SEED = 1337; // single seed -> swap for a server seed in v4 (multiplayer)
@@ -73,8 +74,8 @@ let pauseMenu = null; // set after modeswitcher (needs its exit path)
 const interaction = createInteraction({
   renderer, scene, camera, input, canvas, isPaused: () => !!pauseMenu?.isOpen(),
 });
-// Trigger/click/tap = fire() stub: muzzle flash + hoop pulse, NO shoot-to-return yet.
-interaction.setFireHook(() => { scangun?.flash(); scangun?.resumeAudio(); });
+// Trigger/click/tap = fire(): muzzle flash + hoop pulse always; shoot-to-return on hit.
+interaction.setFireHook((hand) => { scangun?.resumeAudio(); scangun?.flash(); fireShot(hand); });
 
 let environment = null;
 let currentMode = 'Screen';
@@ -106,9 +107,10 @@ pauseMenu = createPauseMenu({
 // on-screen menu button (flat/mobile) → same as Left-X
 document.getElementById('btn-pause')?.addEventListener('click', () => pauseMenu.toggle());
 
-// ---- scanner sample: aim origin+dir (gun ray) + still-hidden sat positions ----
+// ---- aim ray (the gun's muzzle ray): right controller in XR, camera/crosshair in flat.
+// Shared by the scanner sample and the shot, so "where it scans" == "where it shoots". ----
 const _so = new THREE.Vector3(), _sd = new THREE.Vector3(), _sm = new THREE.Matrix4();
-function scannerSample() {
+function aimRay() {
   if (renderer.xr.isPresenting) {
     const c = interaction.getController('right');   // gun rides this controller
     c.getWorldPosition(_so);
@@ -118,7 +120,33 @@ function scannerSample() {
     camera.getWorldPosition(_so);                    // flat: aim = where you look (crosshair)
     camera.getWorldDirection(_sd);
   }
-  return { ox: _so.x, oy: _so.y, oz: _so.z, dx: _sd.x, dy: _sd.y, dz: _sd.z, targets: sats ? sats.targets : [] };
+  return { ox: _so.x, oy: _so.y, oz: _so.z, dx: _sd.x, dy: _sd.y, dz: _sd.z };
+}
+function scannerSample() {
+  const r = aimRay();
+  r.targets = sats ? sats.targets : [];
+  return r;
+}
+
+// ---- the shot: catch a hidden sat along the aim ray (LOS-checked). On catch:
+// rising ding (respects scanner-sound mute), counter tick, VR haptic (if enabled).
+// Miss/blocked = nothing beyond the muzzle flash already fired. ----
+function fireShot(hand) {
+  if (!sats || pauseMenu?.isOpen()) return;
+  const r = aimRay();
+  const caught = sats.tryCatch(r.ox, r.oy, r.oz, r.dx, r.dy, r.dz);
+  if (!caught) return;
+  scangun?.ding();
+  updateReturnedHud(sats.caughtCount);
+  hapticPulse(renderer, { hand: hand || 'right', intensity: 0.7, duration: 60 }); // self-gates on comfort.haptics + XR
+}
+
+// ---- "X / 21 returned" HUD (emphasis pulse on change) ----
+const returnedEl = document.getElementById('returned');
+function updateReturnedHud(n) {
+  if (!returnedEl) return;
+  returnedEl.textContent = `${n} / ${SAT_COUNT} returned`;
+  returnedEl.classList.remove('bump'); void returnedEl.offsetWidth; returnedEl.classList.add('bump');
 }
 
 // ---- gun mounting: right controller in XR, bottom-right viewmodel in flat ----
@@ -136,12 +164,12 @@ function mountGun(mode) {
 document.querySelectorAll('#controls .ctl').forEach((b) => b.addEventListener('click', () => b.blur()));
 
 // ---- Start-Hunt trigger (placeholder: button toggles burst/reset; H / R keys) ----
-function triggerHunt() { sats && (sats.isActive ? sats.reset() : sats.burst()); }
+function triggerHunt() { if (sats) { sats.isActive ? sats.reset() : sats.burst(); updateReturnedHud(sats.caughtCount); } }
 document.getElementById('btn-hunt')?.addEventListener('click', triggerHunt);
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   if (e.code === 'KeyH') triggerHunt();
-  else if (e.code === 'KeyR') sats?.reset();
+  else if (e.code === 'KeyR') { sats?.reset(); updateReturnedHud(0); }   // reset zeroes the counter + hunt
   // ---- scanner-signal DEBUG (stub phase): sweep the seam 0→1 by hand ----
   else if (e.code === 'Backslash') { const on = scanner.toggleSweep(); modeswitcher.setStatus(`scanner sweep: ${on ? 'ON (auto 0→1)' : 'off (idle)'}`); }
   else if (e.code === 'BracketRight') modeswitcher.setStatus(`scanner: ${Math.round(scanner.stepManual(+0.1) * 100)}%`);
@@ -152,13 +180,14 @@ window.addEventListener('keydown', (e) => {
 // Scanner sound lives in comfort ('sound', default ON, persisted): the pause-menu row
 // and the M key flip the SAME flag; scangun mutes when it's off. One source of truth.
 comfort.onChange((s) => scangun?.setMuted(!s.sound));
-// flat/mobile: click/tap = fire() stub (muzzle flash + hoop pulse), matching VR trigger.
-// Also unlocks WebAudio for the Geiger ticks on the first gesture.
+// flat/mobile: click/tap = fire() (muzzle flash + hoop pulse + shoot-to-return),
+// matching the VR trigger. Also unlocks WebAudio on the first gesture.
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== undefined && e.button !== 0) return;   // primary only
   if (renderer.xr.isPresenting || pauseMenu?.isOpen()) return;
   scangun?.resumeAudio();
   scangun?.flash();
+  fireShot(null);
 });
 
 // ---- build the world ----
@@ -188,13 +217,14 @@ Promise.all([
       colliders: [...layout.colliders, v.collider], // occlusion + embedding source
     };
     sats = createSats({ scene, vaultApi: v, coinObj: layout.coinObj, cover, seed: HUNT_SEED });
-    window.__sat.sats = sats;
+    // (exposed via the window.__sat `sats` getter)
 
     // ---- Scanner gun: held weapon/scanner with live screen + tick effects ----
     return createScangun({ scanner }).then((g) => {
       scangun = g;                                 // exposed via window.__sat getter
       g.setMuted(!comfort.get('sound'));           // honor the persisted scanner-sound setting
       mountGun(currentMode);                       // viewmodel now; re-mounts on XR entry
+      updateReturnedHud(0);                        // "0 / 21 returned"
       modeswitcher.setStatus('ready · press Start Hunt (H)');
       reportStats();
     });
@@ -255,8 +285,10 @@ window.__sat = {
   scene, rig, camera, renderer, controls, THREE,
   input, locomotion, collision, comfort, interaction, scanner,
   get scangun() { return scangun; },
+  get sats() { return sats; },
   get vault() { return vaultApi; },
   get pauseMenu() { return pauseMenu; },
+  aimRay, fireShot,
   // drive one logic frame manually (for headless verification when the tab is
   // backgrounded and rAF is throttled). Mirrors the render loop's update order.
   step(dt = 0.016) {
