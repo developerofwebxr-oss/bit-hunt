@@ -160,6 +160,17 @@ export async function createScangun({ scene, scanner }) {
     const g = audioCtx.createGain(); g.gain.value = 0.06;
     src.connect(bp).connect(g).connect(audioCtx.destination); src.start();
   }
+  // soft low "tock" for the last-30s countdown urgency — quiet, same mute as the ticks
+  function urgencyTick() {
+    if (muted || !audioCtx || audioCtx.state !== 'running') return;
+    const t0 = audioCtx.currentTime;
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = 'sine'; o.frequency.value = 180;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(0.05, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.13);
+    o.connect(g).connect(audioCtx.destination); o.start(t0); o.stop(t0 + 0.14);
+  }
   // rising "ding" on a catch — same synthesized style + same mute as the ticks
   function ding() {
     if (muted || !audioCtx || audioCtx.state !== 'running') return;
@@ -283,7 +294,7 @@ export async function createScangun({ scene, scanner }) {
 
   return {
     object: gun,
-    update, flash: doFlash, catchArc, ding, resumeAudio,
+    update, flash: doFlash, catchArc, ding, urgencyTick, resumeAudio,
     mountFlat, mountHand, unmount,
     setMuted(v) { muted = !!v; }, get muted() { return muted; },
   };

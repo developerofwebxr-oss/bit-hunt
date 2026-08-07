@@ -19,13 +19,15 @@ import { createVignette } from './vignette.js';
 import { createSats, SAT_COUNT } from './sats.js';
 import { createScanner } from './scanner.js';
 import { createScangun } from './scangun.js';
+import { createHunt } from './hunt.js';
 import { hapticPulse } from './haptics.js';
 import { comfort } from './comfort.js';
 
 const HUNT_SEED = 1337; // single seed -> swap for a server seed in v4 (multiplayer)
 let sats = null;
-const scanner = createScanner();   // the single scanner-signal seam (stubbed this phase)
+const scanner = createScanner();   // the single scanner-signal seam (real: aim × proximity)
 let scangun = null;
+let hunt = null;
 
 const EYE_HEIGHT = 1.6;
 const app = document.getElementById('app');
@@ -132,13 +134,14 @@ function scannerSample() {
 // rising ding (respects scanner-sound mute), counter tick, VR haptic (if enabled).
 // Miss/blocked = nothing beyond the muzzle flash already fired. ----
 function fireShot(hand) {
-  if (!sats || pauseMenu?.isOpen()) return;
+  if (!sats || pauseMenu?.isOpen() || !hunt?.isRunning()) return;   // only during a running hunt
   const r = aimRay();
   const caught = sats.tryCatch(r.ox, r.oy, r.oz, r.dx, r.dy, r.dz);
   if (!caught) return;
   scangun?.catchArc(caught.pos);                          // lightning bolt arcs to the caught sat
   scangun?.ding();
   updateReturnedHud(sats.caughtCount);
+  hunt.onCatch();                                          // check for the 21/21 win
   hapticPulse(renderer, { hand: hand || 'right', intensity: 0.7, duration: 60 }); // self-gates on comfort.haptics + XR
 }
 
@@ -164,13 +167,13 @@ function mountGun(mode) {
 // back OFF. Blur on click so keys never reach a control. (Fixes free-look-after-jump.)
 document.querySelectorAll('#controls .ctl').forEach((b) => b.addEventListener('click', () => b.blur()));
 
-// ---- Start-Hunt trigger (placeholder: button toggles burst/reset; H / R keys) ----
-function triggerHunt() { if (sats) { sats.isActive ? sats.reset() : sats.burst(); updateReturnedHud(sats.caughtCount); } }
+// ---- Start Hunt / Reset (button + H); R always resets. Overlay actions restart via hunt.start() ----
+function triggerHunt() { if (hunt) hunt.isRunning() ? hunt.reset() : hunt.start(); }
 document.getElementById('btn-hunt')?.addEventListener('click', triggerHunt);
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   if (e.code === 'KeyH') triggerHunt();
-  else if (e.code === 'KeyR') { sats?.reset(); updateReturnedHud(0); }   // reset zeroes the counter + hunt
+  else if (e.code === 'KeyR') hunt?.reset();
   // ---- scanner-signal DEBUG (stub phase): sweep the seam 0→1 by hand ----
   else if (e.code === 'Backslash') { const on = scanner.toggleSweep(); modeswitcher.setStatus(`scanner sweep: ${on ? 'ON (auto 0→1)' : 'off (idle)'}`); }
   else if (e.code === 'BracketRight') modeswitcher.setStatus(`scanner: ${Math.round(scanner.stepManual(+0.1) * 100)}%`);
@@ -225,7 +228,8 @@ Promise.all([
       scangun = g;                                 // exposed via window.__sat getter
       g.setMuted(!comfort.get('sound'));           // honor the persisted scanner-sound setting
       mountGun(currentMode);                       // viewmodel now; re-mounts on XR entry
-      updateReturnedHud(0);                        // "0 / 21 returned"
+      // ---- Hunt: the 4:20 clock + win/lose flow (owns timer HUD + overlay + start button) ----
+      hunt = createHunt({ sats, vaultApi: v, scangun: g, total: SAT_COUNT, setReturnedHud: updateReturnedHud });
       modeswitcher.setStatus('ready · press Start Hunt (H)');
       reportStats();
     });
@@ -274,6 +278,7 @@ renderer.setAnimationLoop(() => {
   sats?.update(dt, clock.elapsedTime);
   scanner.update(dt, scannerSample());                   // advance the signal seam (real: aim×proximity)...
   scangun?.update(dt, clock.elapsedTime, paused);        // ...then drive all gun feedback
+  if (!paused) hunt?.update(dt);                          // 4:20 clock + win/lose flow
   if (renderer.xr.isPresenting) {
     renderer.render(scene, camera); // XR: direct path, no post
   } else {
@@ -287,6 +292,7 @@ window.__sat = {
   input, locomotion, collision, comfort, interaction, scanner,
   get scangun() { return scangun; },
   get sats() { return sats; },
+  get hunt() { return hunt; },
   get vault() { return vaultApi; },
   get pauseMenu() { return pauseMenu; },
   aimRay, fireShot,
@@ -312,6 +318,7 @@ window.__sat = {
     sats?.update(dt, this._t);
     scanner.update(dt, scannerSample());
     scangun?.update(dt, this._t, paused);
+    if (!paused) hunt?.update(dt);
     if (renderer.xr.isPresenting) renderer.render(scene, camera); else postfx.render();
   },
   // place the camera for a screenshot: eye -> target (world coords)

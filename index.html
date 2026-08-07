@@ -83,6 +83,33 @@
         40% { transform: scale(1.22); text-shadow: 0 0 16px rgba(25,255,155,0.95); }
         100% { transform: scale(1); text-shadow: 0 0 8px rgba(25,255,155,0.4); }
       }
+      /* countdown timer */
+      #timer { color: var(--text); font-weight: 700; font-size: 16px; letter-spacing: 1px; margin-top: 2px; }
+      #timer.urgent { color: #ff5a5a; animation: timer-urgent 1s ease-in-out infinite; }
+      @keyframes timer-urgent {
+        0%, 100% { opacity: 0.7; text-shadow: 0 0 6px rgba(255,90,90,0.4); }
+        50% { opacity: 1; text-shadow: 0 0 16px rgba(255,90,90,0.95); }
+      }
+
+      /* win/lose overlay */
+      #hunt-overlay {
+        position: absolute; inset: 0;
+        display: none; align-items: center; justify-content: center;
+        background: rgba(2, 8, 5, 0.6); backdrop-filter: blur(4px);
+        pointer-events: auto; z-index: 30;
+      }
+      #hunt-overlay.show { display: flex; animation: hunt-fade 0.35s ease-out; }
+      @keyframes hunt-fade { from { opacity: 0; } to { opacity: 1; } }
+      .hunt-card {
+        background: var(--panel); border: 1px solid var(--green);
+        border-radius: 16px; padding: 30px 40px; min-width: 300px; text-align: center;
+        box-shadow: 0 0 40px rgba(25, 255, 155, 0.2);
+      }
+      #hunt-overlay.lose .hunt-card { border-color: #ff5a5a; box-shadow: 0 0 40px rgba(255, 90, 90, 0.2); }
+      .hunt-card h2 { margin: 0 0 10px; font-size: 26px; letter-spacing: 3px; color: var(--green); }
+      #hunt-overlay.lose .hunt-card h2 { color: #ff7a7a; }
+      #hunt-sub { color: var(--text); font-size: 15px; margin-bottom: 20px; opacity: 0.9; }
+      #hunt-action { font-size: 15px; padding: 12px 22px; }
 
       /* Bottom control bar (mode switcher + free-look) */
       #controls {
@@ -153,7 +180,8 @@
       body.xr-active #esc-hint,
       body.xr-active #joystick,
       body.xr-active #btn-jump,
-      body.xr-active #verb-buttons { display: none; }
+      body.xr-active #verb-buttons,
+      body.xr-active #hunt-overlay { display: none; }
 
       /* ---------- mobile locomotion controls (shown only on coarse pointers) ---------- */
       #joystick, #btn-jump { display: none; }
@@ -275,6 +303,7 @@
         <div>BIT-HUNT · <b id="mode-label">Screen</b></div>
         <div id="status">loading assets…</div>
         <div id="returned">0 / 21 returned</div>
+        <div id="timer">4:20</div>
       </div>
 
       <div id="crosshair"></div>

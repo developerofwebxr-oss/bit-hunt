@@ -158,12 +158,12 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
   portal.renderOrder = 3; portal.frustumCulled = false;
   scene.add(portal);
 
-  let fill = 0, fillTarget = 0, portalTime = 0, drawAcc = 0, absorbT = 0;
+  let fill = 0, fillTarget = 0, portalTime = 0, drawAcc = 0, absorbT = 0, flare = 0;
   function drawPortal() {
     const W = 256, c = 128, R = 124;
     pctx.clearRect(0, 0, W, W);
     const breath = 0.85 + 0.15 * Math.sin(portalTime * 2.2);
-    const a = (0.14 + 1.05 * fill) * breath;           // ember → blazing (brighter at full)
+    const a = (0.14 + 1.05 * fill) * breath * (1 + flare * 1.8); // ember → blazing; flares on the win seal
     const grd = pctx.createRadialGradient(c, c, 2, c, c, R);
     grd.addColorStop(0.0, `rgba(200,255,225,${(0.9 * a).toFixed(3)})`);
     grd.addColorStop(0.25, `rgba(60,255,170,${(0.75 * a).toFixed(3)})`);
@@ -188,7 +188,8 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
   drawPortal(); // faint ember at 0/21
 
   function pulseAbsorb(count = 0, total = 21) { absorbT = 1; fillTarget = Math.min(1, count / total); }
-  function resetGlow() { absorbT = 0; fill = 0; fillTarget = 0; for (const m of glowMats) m.emissiveIntensity = 0; drawPortal(); }
+  function flarePortal() { flare = 1; }   // one bright surge as the door seals on a win
+  function resetGlow() { absorbT = 0; fill = 0; fillTarget = 0; flare = 0; for (const m of glowMats) m.emissiveIntensity = 0; drawPortal(); }
 
   function updateVault(dt) {
     // door swing (stays closed for now)
@@ -201,9 +202,10 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
     if (absorbT > 0) absorbT = Math.max(0, absorbT - dt / 0.5);
     const bodyE = absorbT * 0.3;
     for (const m of glowMats) m.emissiveIntensity = bodyE;
-    // portal: ease fill toward target + a brief bump on the pulse; animate & redraw ~15fps
+    // portal: ease fill toward target, decay the win flare; animate & redraw ~15fps
     portalTime += dt;
     fill += (fillTarget - fill) * Math.min(1, dt * 3);
+    if (flare > 0) flare = Math.max(0, flare - dt / 0.6);
     drawAcc += dt;
     if (drawAcc >= 1 / 15) { drawPortal(); drawAcc = 0; }
   }
@@ -216,5 +218,5 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
     minY: 0, maxY: vbox.max.y,
   };
 
-  return { vault, door: doorInner, hinge, hole, size: vsize, collider, openVault, closeVault, updateVault, pulseAbsorb, resetGlow };
+  return { vault, door: doorInner, hinge, hole, size: vsize, collider, openVault, closeVault, updateVault, pulseAbsorb, flarePortal, resetGlow };
 }

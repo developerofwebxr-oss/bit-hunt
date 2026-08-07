@@ -240,8 +240,13 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
       }
       return out;
     },
-    markCaught(i) { caught.add(i); },       // wired to shoot-to-return next phase
+    markCaught(i) { caught.add(i); },       // (also called internally by tryCatch)
     resetCaught() { caught.clear(); },
     get caughtCount() { return caught.size; },
+    // true while any caught sat is still flying back — the hunt waits for this to clear
+    // before sealing the vault on a win.
+    get anyReturning() { return sats.some((s) => s.state === 'returning'); },
+    // LOSE: stop the remaining hidden sats idling (freeze in place, drop from scanner targets)
+    freeze() { for (const s of sats) if (s.state === 'hidden') s.state = 'frozen'; },
   };
 }
