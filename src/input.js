@@ -42,9 +42,9 @@ export function createInput({ renderer, canvas }) {
     if (e.repeat) return;
     keys.add(e.code);
     if (e.code === 'Space') edgeBuf.jump = true;
-    // menu: Esc primary, M alias. When pointer-lock (free look) is active, Esc is
-    // the browser's lock-release — don't also open the menu on that press.
-    if (e.code === 'KeyM') edgeBuf.pause = true;
+    // menu: Esc (flat). When pointer-lock (free look) is active, Esc is the browser's
+    // lock-release — don't also open the menu on that press. (M is scanner-sound now,
+    // not a menu alias, so it can't double-fire the menu.)
     if (e.code === 'Escape' && !document.pointerLockElement) edgeBuf.pause = true;
     if (e.code === 'KeyF') edgeBuf.fly = true;     // fly toggle (gated by ENABLE_FLY)
     if (e.code === 'KeyB') edgeBuf.builder = true; // builder verb

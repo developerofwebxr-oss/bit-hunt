@@ -7,6 +7,7 @@ const DEFAULTS = {
   vignette: false, // tunnel-vignette while moving/flying
   snapTurn: false, // right-stick turn becomes fixed snaps instead of smooth
   haptics: false,  // controller pulse on fire / grab / jump-land
+  sound: true,     // scanner Geiger ticks — core feedback, so default ON (not a nanny toggle)
 };
 
 // Fixed locomotion speeds (shared source of truth; NOT user-tunable).

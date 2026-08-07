@@ -9,6 +9,7 @@ import { comfort } from './comfort.js';
 const ROWS = [
   { key: 'resume', label: 'Resume', kind: 'action' },
   { key: 'exit', label: 'Exit to screen mode', kind: 'action' },
+  { key: 'sound', label: 'Scanner sound', kind: 'toggle' },
   { key: 'vignette', label: 'Vignette while moving', kind: 'toggle' },
   { key: 'snapTurn', label: 'Snap turn (45°)', kind: 'toggle' },
   { key: 'haptics', label: 'Haptics', kind: 'toggle' },

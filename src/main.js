@@ -129,6 +129,12 @@ function mountGun(mode) {
   else scangun.mountFlat(camera);
 }
 
+// Control-bar buttons must not keep DOM focus: a focused <button> is activated by
+// Space/Enter, so jumping (Space) would re-fire the last-clicked control — e.g.
+// after enabling Free look, the button stays focused and Space toggles pointer-lock
+// back OFF. Blur on click so keys never reach a control. (Fixes free-look-after-jump.)
+document.querySelectorAll('#controls .ctl').forEach((b) => b.addEventListener('click', () => b.blur()));
+
 // ---- Start-Hunt trigger (placeholder: button toggles burst/reset; H / R keys) ----
 function triggerHunt() { sats && (sats.isActive ? sats.reset() : sats.burst()); }
 document.getElementById('btn-hunt')?.addEventListener('click', triggerHunt);
@@ -140,8 +146,12 @@ window.addEventListener('keydown', (e) => {
   else if (e.code === 'Backslash') { const on = scanner.toggleSweep(); modeswitcher.setStatus(`scanner sweep: ${on ? 'ON (auto 0→1)' : 'off (idle)'}`); }
   else if (e.code === 'BracketRight') modeswitcher.setStatus(`scanner: ${Math.round(scanner.stepManual(+0.1) * 100)}%`);
   else if (e.code === 'BracketLeft') modeswitcher.setStatus(`scanner: ${Math.round(scanner.stepManual(-0.1) * 100)}%`);
-  else if (e.code === 'KeyM') { scangun?.setMuted(!scangun.muted); modeswitcher.setStatus(`tick audio: ${scangun?.muted ? 'muted' : 'on'}`); }
+  // M = scanner sound toggle (same flag as the pause-menu row; comfort keeps them in sync)
+  else if (e.code === 'KeyM') { const on = comfort.toggle('sound'); modeswitcher.setStatus(`scanner sound: ${on ? 'on' : 'off'}`); }
 });
+// Scanner sound lives in comfort ('sound', default ON, persisted): the pause-menu row
+// and the M key flip the SAME flag; scangun mutes when it's off. One source of truth.
+comfort.onChange((s) => scangun?.setMuted(!s.sound));
 // flat/mobile: click/tap = fire() stub (muzzle flash + hoop pulse), matching VR trigger.
 // Also unlocks WebAudio for the Geiger ticks on the first gesture.
 canvas.addEventListener('pointerdown', (e) => {
@@ -183,6 +193,7 @@ Promise.all([
     // ---- Scanner gun: held weapon/scanner with live screen + tick effects ----
     return createScangun({ scanner }).then((g) => {
       scangun = g;                                 // exposed via window.__sat getter
+      g.setMuted(!comfort.get('sound'));           // honor the persisted scanner-sound setting
       mountGun(currentMode);                       // viewmodel now; re-mounts on XR entry
       modeswitcher.setStatus('ready · press Start Hunt (H)');
       reportStats();

@@ -288,7 +288,9 @@
         <button class="ctl tip" id="btn-screen">Screen</button>
         <button class="ctl tip" id="btn-vr">Enter VR</button>
         <button class="ctl tip" id="btn-ar">Enter AR</button>
-        <button class="ctl tip" id="btn-freelook" data-tip="Hands-free look (Esc to release)">Free look: off</button>
+        <!-- no data-tip here: the dedicated #esc-hint ("press ESC to release look") is the
+             single free-look hint; a hover tooltip would overlap it while pointer-locked. -->
+        <button class="ctl" id="btn-freelook">Free look: off</button>
         <button class="ctl tip" id="btn-pause" data-tip="Pause / comfort (Left-X · Esc)">☰ Menu</button>
         <button class="ctl tip" id="btn-hunt" data-tip="Burst the vault + scatter sats (H · R resets)">Start Hunt</button>
       </div>
