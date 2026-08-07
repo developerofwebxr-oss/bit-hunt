@@ -23,7 +23,7 @@ const HOOP   = { x: 0, y: 0.50, z: -0.32, r: 0.052, tube: 0.006 };
 const MUZZLE = { x: 0, y: 0.30, z: -0.60 };
 const GREEN = 0x19ff9b;
 
-export async function createScangun({ scanner }) {
+export async function createScangun({ scene, scanner }) {
   const shell = await loadRaw('scangun.glb');
   const gun = new THREE.Group();
   gun.name = 'scangun';
@@ -81,6 +81,64 @@ export async function createScangun({ scanner }) {
   flash.scale.set(1, 1, 1.6);
   flash.frustumCulled = false;
   gun.add(flash);
+
+  // ---------- muzzle lightning: pre-allocated jagged bolts (no per-shot allocation) ----------
+  // Bolts live in WORLD space (added to the scene) so they render at true scale, not the
+  // gun's viewmodel scale. Each shot rewrites the existing position buffers in place.
+  const MUZZLE_V = new THREE.Vector3(MUZZLE.x, MUZZLE.y, MUZZLE.z);
+  const N_BOLTS = 3, PTS = 8, BOLT_DUR = 0.13;
+  const boltMat = new THREE.LineBasicMaterial({ color: 0x9dffcf, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  const boltGroup = new THREE.Group(); boltGroup.name = 'muzzle-bolts'; boltGroup.visible = false;
+  const bolts = [];
+  for (let i = 0; i < N_BOLTS; i++) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(PTS * 3), 3));
+    const line = new THREE.Line(g, boltMat); line.frustumCulled = false;
+    boltGroup.add(line); bolts.push(line);
+  }
+  if (scene) scene.add(boltGroup);
+  let boltT = 0;
+  // reused scratch (no per-shot allocation)
+  const _mw = new THREE.Vector3(), _fw = new THREE.Vector3(), _rt = new THREE.Vector3(), _upp = new THREE.Vector3(), _end = new THREE.Vector3();
+  const _UP = new THREE.Vector3(0, 1, 0);
+  function writeBolt(line, fx, fy, fz, tx, ty, tz, jit) {
+    const pos = line.geometry.attributes.position;
+    _fw.set(tx - fx, ty - fy, tz - fz); const len = _fw.length() || 1; _fw.multiplyScalar(1 / len);
+    _rt.crossVectors(_fw, _UP); if (_rt.lengthSq() < 1e-6) _rt.set(1, 0, 0); else _rt.normalize();
+    _upp.crossVectors(_rt, _fw).normalize();
+    for (let k = 0; k < PTS; k++) {
+      const t = k / (PTS - 1);
+      const edge = (k === 0 || k === PTS - 1);
+      const jx = edge ? 0 : (Math.random() * 2 - 1) * jit;
+      const jy = edge ? 0 : (Math.random() * 2 - 1) * jit;
+      pos.setXYZ(k,
+        fx + _fw.x * len * t + _rt.x * jx + _upp.x * jy,
+        fy + _fw.y * len * t + _rt.y * jx + _upp.y * jy,
+        fz + _fw.z * len * t + _rt.z * jx + _upp.z * jy);
+    }
+    pos.needsUpdate = true;
+  }
+  // targetWorld (optional): on a catch, bolt 0 arcs to the sat; others fan off the muzzle.
+  function strike(targetWorld) {
+    if (!scene) return;
+    gun.updateMatrixWorld();
+    _mw.copy(MUZZLE_V).applyMatrix4(gun.matrixWorld);           // muzzle world pos
+    _fw.set(0, 0, -1).transformDirection(gun.matrixWorld).normalize(); // gun forward (world)
+    const fx = _mw.x, fy = _mw.y, fz = _mw.z;
+    const fwx = _fw.x, fwy = _fw.y, fwz = _fw.z;               // cache (writeBolt reuses _fw)
+    for (let i = 0; i < bolts.length; i++) {
+      if (targetWorld && i === 0) {
+        writeBolt(bolts[i], fx, fy, fz, targetWorld.x, targetWorld.y, targetWorld.z, 0.06);
+      } else {
+        const reach = 0.5 + Math.random() * 0.35;
+        _end.set(fx + fwx * reach + (Math.random() * 2 - 1) * 0.12,
+                 fy + fwy * reach + (Math.random() * 2 - 1) * 0.12,
+                 fz + fwz * reach + (Math.random() * 2 - 1) * 0.12);
+        writeBolt(bolts[i], fx, fy, fz, _end.x, _end.y, _end.z, 0.05 + Math.random() * 0.05);
+      }
+    }
+    boltGroup.visible = true; boltT = 1;
+  }
 
   // ---------- audio: soft synthesized Geiger tick ----------
   let audioCtx = null, noiseBuf = null, muted = false, tickAcc = 0, tickIdx = 0;
@@ -176,6 +234,12 @@ export async function createScangun({ scanner }) {
     hoop.scale.setScalar(hs);
     // muzzle flash decay
     if (flashT > 0) { flashT -= dt; flashMat.opacity = Math.max(0, flashT / FLASH_DUR); }
+    // muzzle lightning decay (flicker as it fades)
+    if (boltT > 0) {
+      boltT = Math.max(0, boltT - dt / BOLT_DUR);
+      boltMat.opacity = boltT * (0.6 + 0.4 * Math.random());
+      if (boltT === 0) boltGroup.visible = false;
+    }
     // audio ticks — rate rises with signal; skip when muted/paused/near-silent
     if (!muted && !paused && signal > 0.04) {
       tickAcc += dt;
@@ -194,7 +258,8 @@ export async function createScangun({ scanner }) {
     }
   }
 
-  function doFlash() { flashT = FLASH_DUR; }
+  function doFlash() { flashT = FLASH_DUR; strike(null); }         // flash + muzzle lightning every shot
+  function catchArc(worldPos) { strike(worldPos); }                // on catch, bolt 0 arcs to the sat
 
   // ---------- mounting ----------
   function mountFlat(camera) {
@@ -218,7 +283,7 @@ export async function createScangun({ scanner }) {
 
   return {
     object: gun,
-    update, flash: doFlash, ding, resumeAudio,
+    update, flash: doFlash, catchArc, ding, resumeAudio,
     mountFlat, mountHand, unmount,
     setMuted(v) { muted = !!v; }, get muted() { return muted; },
   };

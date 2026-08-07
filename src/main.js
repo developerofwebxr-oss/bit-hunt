@@ -136,6 +136,7 @@ function fireShot(hand) {
   const r = aimRay();
   const caught = sats.tryCatch(r.ox, r.oy, r.oz, r.dx, r.dy, r.dz);
   if (!caught) return;
+  scangun?.catchArc(caught.pos);                          // lightning bolt arcs to the caught sat
   scangun?.ding();
   updateReturnedHud(sats.caughtCount);
   hapticPulse(renderer, { hand: hand || 'right', intensity: 0.7, duration: 60 }); // self-gates on comfort.haptics + XR
@@ -220,7 +221,7 @@ Promise.all([
     // (exposed via the window.__sat `sats` getter)
 
     // ---- Scanner gun: held weapon/scanner with live screen + tick effects ----
-    return createScangun({ scanner }).then((g) => {
+    return createScangun({ scene, scanner }).then((g) => {
       scangun = g;                                 // exposed via window.__sat getter
       g.setMuted(!comfort.get('sound'));           // honor the persisted scanner-sound setting
       mountGun(currentMode);                       // viewmodel now; re-mounts on XR entry

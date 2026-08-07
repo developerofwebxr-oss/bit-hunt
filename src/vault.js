@@ -120,8 +120,10 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
   function openVault() { state.target = 1; }
   function closeVault() { state.target = 0; }
 
-  // ---- green absorb feedback: a bright pulse each time a returned sat lands, plus
-  // a cumulative glow that strengthens as more are returned (cheap emissive, no assets) ----
+  // ---- absorb feedback ----
+  // Body/door stay DARK (no cumulative brightening — it killed the vibe). They only
+  // get a brief, subtle emissive pulse on each catch. ALL cumulative glow lives in the
+  // portal (below): the opening comes back to life as coins return.
   const glowMats = [];
   vault.traverse((o) => {
     if (!o.isMesh || !o.material) return;
@@ -132,9 +134,61 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
       glowMats.push(m);
     }
   });
-  let absorbT = 0, glowBase = 0;
-  function pulseAbsorb(count = 0, total = 21) { absorbT = 1; glowBase = Math.min(0.5, (count / total) * 0.5); }
-  function resetGlow() { absorbT = 0; glowBase = 0; for (const m of glowMats) m.emissiveIntensity = 0; }
+
+  // ---- portal: ONE animated CanvasTexture disc inside the circular opening. Fill
+  // (0..1 = count/21) drives intensity: 0 = faint ember, 1 = blazing portal. Swirl +
+  // breathe are time-based. Canvas redraws throttled to ~15fps; the mesh/material/
+  // canvas/texture are allocated ONCE (no per-frame allocation). ----
+  const portalCanvas = document.createElement('canvas'); portalCanvas.width = portalCanvas.height = 256;
+  const pctx = portalCanvas.getContext('2d');
+  const portalTex = new THREE.CanvasTexture(portalCanvas); portalTex.colorSpace = THREE.SRGBColorSpace;
+  const portalMat = new THREE.MeshBasicMaterial({ map: portalTex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  const portal = new THREE.Mesh(new THREE.CircleGeometry(hole.diameter * 0.5 * 0.96, 48), portalMat);
+  // the closed door's central hub protrudes forward of the face — raycast it and sit the
+  // portal just in front so the glow reads over the whole opening instead of being occluded.
+  // (update world matrices first: the door was just parented and its matrix is otherwise
+  // stale, so the ray would miss the door and punch through to the vault's back interior.)
+  vault.updateMatrixWorld(true);
+  const _hubRc = new THREE.Raycaster(new THREE.Vector3(hole.center.x, hole.center.y, hole.center.z + 1.5), new THREE.Vector3(0, 0, -1));
+  const _vm = []; vault.traverse((o) => o.isMesh && _vm.push(o));
+  const _hub = _hubRc.intersectObjects(_vm, true)[0];
+  // clamp to a sane forward offset in front of the face (guards against a stray deep hit)
+  const _hubZ = Math.min(hole.center.z + 0.8, Math.max(hole.center.z + 0.04, (_hub ? _hub.point.z : hole.center.z) + 0.06));
+  portal.position.set(hole.center.x, hole.center.y, _hubZ);
+  portal.renderOrder = 3; portal.frustumCulled = false;
+  scene.add(portal);
+
+  let fill = 0, fillTarget = 0, portalTime = 0, drawAcc = 0, absorbT = 0;
+  function drawPortal() {
+    const W = 256, c = 128, R = 124;
+    pctx.clearRect(0, 0, W, W);
+    const breath = 0.85 + 0.15 * Math.sin(portalTime * 2.2);
+    const a = (0.14 + 1.05 * fill) * breath;           // ember → blazing (brighter at full)
+    const grd = pctx.createRadialGradient(c, c, 2, c, c, R);
+    grd.addColorStop(0.0, `rgba(200,255,225,${(0.9 * a).toFixed(3)})`);
+    grd.addColorStop(0.25, `rgba(60,255,170,${(0.75 * a).toFixed(3)})`);
+    grd.addColorStop(0.7, `rgba(18,190,115,${(0.32 * a).toFixed(3)})`);
+    grd.addColorStop(1.0, 'rgba(6,60,40,0)');
+    pctx.fillStyle = grd; pctx.beginPath(); pctx.arc(c, c, R, 0, Math.PI * 2); pctx.fill();
+    // swirling arms (rotate with time; more visible as fill grows)
+    pctx.save(); pctx.translate(c, c); pctx.rotate(portalTime * 0.6);
+    pctx.strokeStyle = `rgba(190,255,215,${(0.45 * a).toFixed(3)})`; pctx.lineWidth = 3;
+    for (let k = 0; k < 3; k++) {
+      pctx.rotate((Math.PI * 2) / 3); pctx.beginPath();
+      for (let t = 0; t <= 1.0001; t += 0.05) { const rr = R * (0.15 + 0.8 * t), ang = t * 3.0; const x = Math.cos(ang) * rr, y = Math.sin(ang) * rr; t === 0 ? pctx.moveTo(x, y) : pctx.lineTo(x, y); }
+      pctx.stroke();
+    }
+    pctx.restore();
+    // concentric rings light up progressively with fill
+    const rings = Math.round(fill * 4);
+    pctx.strokeStyle = `rgba(60,255,170,${(0.4 * a).toFixed(3)})`; pctx.lineWidth = 2;
+    for (let i = 1; i <= rings; i++) { pctx.beginPath(); pctx.arc(c, c, R * (i / 5), 0, Math.PI * 2); pctx.stroke(); }
+    portalTex.needsUpdate = true;
+  }
+  drawPortal(); // faint ember at 0/21
+
+  function pulseAbsorb(count = 0, total = 21) { absorbT = 1; fillTarget = Math.min(1, count / total); }
+  function resetGlow() { absorbT = 0; fill = 0; fillTarget = 0; for (const m of glowMats) m.emissiveIntensity = 0; drawPortal(); }
 
   function updateVault(dt) {
     // door swing (stays closed for now)
@@ -143,10 +197,15 @@ export async function buildVault(scene, position = new THREE.Vector3(0, 0, -6)) 
       state.current += Math.sign(state.target - state.current) * Math.min(step, Math.abs(state.target - state.current));
       hinge.rotation.y = state.current * HINGE_OPEN_ANGLE;
     }
-    // absorb glow: pulse decays over ~0.5s, sits on the cumulative base
+    // body/door: subtle brief pulse only (stays dark at rest)
     if (absorbT > 0) absorbT = Math.max(0, absorbT - dt / 0.5);
-    const e = glowBase + absorbT * 0.9;
-    for (const m of glowMats) m.emissiveIntensity = e;
+    const bodyE = absorbT * 0.3;
+    for (const m of glowMats) m.emissiveIntensity = bodyE;
+    // portal: ease fill toward target + a brief bump on the pulse; animate & redraw ~15fps
+    portalTime += dt;
+    fill += (fillTarget - fill) * Math.min(1, dt * 3);
+    drawAcc += dt;
+    if (drawAcc >= 1 / 15) { drawPortal(); drawAcc = 0; }
   }
 
   // ---- collider (vault body AABB in world XZ, base at floor) ----

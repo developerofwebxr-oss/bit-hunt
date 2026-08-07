@@ -126,7 +126,7 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
   const caught = new Set();   // indices removed from the hunt (returned to the vault)
   const TRAVEL = 1.4;         // s per sat, vault -> hiding spot (burst)
   // ---- shoot-to-return tunables (top-of-feature constants) ----
-  const HIT_RADIUS = 0.45;    // generous hunt hit sphere around each sat (m)
+  const HIT_RADIUS = 0.55;    // generous hunt hit sphere around each sat (m) — hunt, not a precision shooter
   const MAX_RANGE = 40;       // shot reach (m) — comfortably room-sized
   const RETURN_TRAVEL = 1.2;  // s for the catch -> vault flight (mirrors the burst tween)
 

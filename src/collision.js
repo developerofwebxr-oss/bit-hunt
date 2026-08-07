@@ -15,11 +15,14 @@ export function createCollision() {
   const PLAYER_R = 0.35;
   const PLAYER_H = 1.6;
   // Step-up: how far below a walkable prop top the feet may be and still "mount" it.
-  // resolveXZ stops blocking (lets you move over the footprint) and groundHeight
-  // lifts you, using the SAME value so the two agree on on-top vs blocked. Sized so
-  // a normal hop (~0.69 m apex) reliably clears a ~0.67 m crate: you enter the
-  // footprint well before the apex instead of only in a 2 cm window at the very top.
-  const STEP_UP = 0.34;
+  // It is RELATIVE TO THE PROP TOP, so mounting works the same from any support you
+  // jump off (floor, deck, another prop) — a ~0.69 m crate mounts identically whether
+  // its base is at 0 or on the 1.73 m deck. Sized just under the crate height (0.69 m)
+  // so the SIDES stay solid (you can't walk through/onto it at rest) while a normal
+  // WALKING hop opens the footprint early enough to land on — 0.34 only opened the top
+  // third of the arc, which needed a pressed/sprint jump and felt unmountable on the
+  // deck crate (usually approached with a run-up). resolveXZ and groundHeight share it.
+  const STEP_UP = 0.55;
 
   function setBounds(half) { bounds = { half }; }
   function clearBounds() { bounds = null; }
