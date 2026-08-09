@@ -43,9 +43,11 @@ export function createInput({ renderer, canvas }) {
     keys.add(e.code);
     if (e.code === 'Space') edgeBuf.jump = true;
     // menu: Esc (flat). When pointer-lock (free look) is active, Esc is the browser's
-    // lock-release — don't also open the menu on that press. (M is scanner-sound now,
-    // not a menu alias, so it can't double-fire the menu.)
-    if (e.code === 'Escape' && !document.pointerLockElement) edgeBuf.pause = true;
+    // lock-release — don't also open the menu on that press. When the win/lose overlay
+    // is up, Esc closes THAT (hunt.js) — don't also open the menu. (M is scanner-sound
+    // now, not a menu alias, so it can't double-fire the menu.)
+    if (e.code === 'Escape' && !document.pointerLockElement
+        && !document.getElementById('hunt-overlay')?.classList.contains('show')) edgeBuf.pause = true;
     if (e.code === 'KeyF') edgeBuf.fly = true;     // fly toggle (gated by ENABLE_FLY)
     if (e.code === 'KeyB') edgeBuf.builder = true; // builder verb
     if (e.code === 'KeyY') edgeBuf.scanner = true; // game verb (scanner)

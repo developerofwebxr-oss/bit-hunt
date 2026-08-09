@@ -24,14 +24,34 @@ export function createHunt({ sats, vaultApi, scangun, total = 21, setReturnedHud
   const startBtn = document.getElementById('btn-hunt');
 
   // ---- overlay (DOM; flat/mobile — the 3D door-seal/flare reads in VR) ----
+  // Buttons: win → Hunt again · Next level (disabled) · Continue exploring;
+  //          lose → Try again · Continue exploring.
   const overlay = document.createElement('div');
   overlay.id = 'hunt-overlay';
-  overlay.innerHTML = '<div class="hunt-card"><h2 id="hunt-title"></h2><div id="hunt-sub"></div><button id="hunt-action" class="ctl">Hunt again</button></div>';
+  overlay.innerHTML =
+    '<div class="hunt-card">' +
+      '<h2 id="hunt-title"></h2>' +
+      '<div id="hunt-sub"></div>' +
+      '<div class="hunt-actions">' +
+        '<button id="hunt-again" class="ctl"></button>' +
+        '<button id="hunt-next" class="ctl tip" data-tip="Coming soon" disabled>Next level →</button>' +
+        '<button id="hunt-continue" class="ctl">Continue exploring</button>' +
+      '</div>' +
+    '</div>';
   document.getElementById('hud').appendChild(overlay);
   const titleEl = overlay.querySelector('#hunt-title');
   const subEl = overlay.querySelector('#hunt-sub');
-  const actionBtn = overlay.querySelector('#hunt-action');
-  actionBtn.addEventListener('click', () => { actionBtn.blur(); start(); });
+  const againBtn = overlay.querySelector('#hunt-again');
+  const nextBtn = overlay.querySelector('#hunt-next');
+  const continueBtn = overlay.querySelector('#hunt-continue');
+  againBtn.addEventListener('click', () => { againBtn.blur(); start(); });
+  nextBtn.addEventListener('click', () => { nextBtn.blur(); startNextLevel(); }); // disabled today (no-op)
+  continueBtn.addEventListener('click', () => { continueBtn.blur(); continueExploring(); });
+  // Esc closes the result overlay into free-roam. (input.js suppresses the pause-menu
+  // route to Esc while the overlay is showing, so these don't conflict.)
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape' && overlay.classList.contains('show')) continueExploring();
+  });
 
   function drawTimer() {
     if (!timerEl) return;
@@ -39,11 +59,24 @@ export function createHunt({ sats, vaultApi, scangun, total = 21, setReturnedHud
     timerEl.classList.toggle('urgent', state === 'running' && timeLeft <= URGENCY_AT);
   }
   function setBtn(label) { if (startBtn) startBtn.textContent = label; }
-  function showOverlay(title, sub, action, win) {
-    titleEl.textContent = title; subEl.textContent = sub; actionBtn.textContent = action;
+  function showOverlay(title, sub, win) {
+    titleEl.textContent = title; subEl.textContent = sub;
+    againBtn.textContent = win ? 'Hunt again' : 'Try again';
+    nextBtn.style.display = win ? '' : 'none';        // "Next level →" only on a win
     overlay.classList.toggle('win', !!win); overlay.classList.toggle('lose', !win);
     overlay.classList.add('show');
   }
+
+  // Drop out of the result overlay into free-roam: no hunt running, timer cleared,
+  // but the world stays in its END state (vault sealed on win / open on lose, sats
+  // as-is). H then starts a fresh hunt via start()→reset()+burst.
+  function continueExploring() {
+    state = 'idle'; timeLeft = HUNT_DURATION;
+    overlay.classList.remove('show');
+    drawTimer(); setBtn('Start Hunt');
+  }
+  // Level 2 flow point — button is disabled until it lands.
+  function startNextLevel() { console.log('[hunt] startNextLevel() — coming soon (Level 2 stub)'); }
 
   function start() {
     reset();
@@ -68,7 +101,7 @@ export function createHunt({ sats, vaultApi, scangun, total = 21, setReturnedHud
     state = 'lost';
     const got = total - sats.caughtCount;
     sats.freeze();                            // remaining sats stop idling
-    showOverlay("TIME'S UP", `${got} got away`, 'Try again', false);
+    showOverlay("TIME'S UP", `${got} got away`, false);
     // vault door stays OPEN — the job isn't done
   }
   function update(dt) {
@@ -87,7 +120,7 @@ export function createHunt({ sats, vaultApi, scangun, total = 21, setReturnedHud
           sealed = true;
           vaultApi?.closeVault?.();
           vaultApi?.flarePortal?.();
-          showOverlay('VAULT SECURED', `21 / 21 in ${fmt(winElapsed)}`, 'Hunt again', true);
+          showOverlay('VAULT SECURED', `21 / 21 in ${fmt(winElapsed)}`, true);
         }
       }
     }
