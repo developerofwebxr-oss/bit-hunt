@@ -24,8 +24,8 @@ export function createHunt({ sats, vaultApi, scangun, total = 21, setReturnedHud
   const startBtn = document.getElementById('btn-hunt');
 
   // ---- overlay (DOM; flat/mobile — the 3D door-seal/flare reads in VR) ----
-  // Buttons: win → Hunt again · Next level (disabled) · Continue exploring;
-  //          lose → Try again · Continue exploring.
+  // Buttons: win → Hunt again · Next level (disabled) · Exit;
+  //          lose → Try again · Exit. ("Exit" closes the overlay into free-roam.)
   const overlay = document.createElement('div');
   overlay.id = 'hunt-overlay';
   overlay.innerHTML =
@@ -35,7 +35,7 @@ export function createHunt({ sats, vaultApi, scangun, total = 21, setReturnedHud
       '<div class="hunt-actions">' +
         '<button id="hunt-again" class="ctl"></button>' +
         '<button id="hunt-next" class="ctl tip" data-tip="Coming soon" disabled>Next level →</button>' +
-        '<button id="hunt-continue" class="ctl">Continue exploring</button>' +
+        '<button id="hunt-continue" class="ctl">Exit</button>' +
       '</div>' +
     '</div>';
   document.getElementById('hud').appendChild(overlay);
