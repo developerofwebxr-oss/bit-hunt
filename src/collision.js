@@ -22,7 +22,16 @@ export function createCollision() {
   // WALKING hop opens the footprint early enough to land on — 0.34 only opened the top
   // third of the arc, which needed a pressed/sprint jump and felt unmountable on the
   // deck crate (usually approached with a run-up). resolveXZ and groundHeight share it.
-  const STEP_UP = 0.55;
+  //
+  // At 0.55 the mount was still a knife-edge on the DECK crate: its top (2.41) minus the
+  // deck (1.73) is 0.68 ≈ the jump apex (0.69), so the "allowed to move over the footprint"
+  // window opened only 0.13 m into the jump — the player got shoved to the crate face while
+  // below it and had to race 0.35 m back into the footprint before the feet fell below the
+  // threshold. Coin-flip. 0.62 opens the window ~0.06 m off the support (window ≈ whole jump),
+  // so a normal jump mounts reliably, while staying < the 0.68 m crate height so the SIDES are
+  // still solid (you can't walk on without a jump). Floor crates behave the same (still need a
+  // hop, just forgiving timing).
+  const STEP_UP = 0.62;
 
   function setBounds(half) { bounds = { half }; }
   function clearBounds() { bounds = null; }

@@ -18,10 +18,13 @@ export function makeRng(seed) {
 }
 
 // segment (a->b) vs AABB slab test; true if it enters the box strictly between
-// the endpoints (t in [tMin,tMax]) — used for line-of-sight occlusion.
-function segHitsBox(a, b, box, tMin = 0.03, tMax = 0.985) {
-  const lo = [box.minX, box.minY ?? 0, box.minZ];
-  const hi = [box.maxX, box.maxY ?? box.y ?? 0, box.maxZ];
+// the endpoints (t in [tMin,tMax]) — used for line-of-sight occlusion. `shrink`
+// insets the box on X/Z (not Y): for the SHOT's LOS we shrink so a ray to a
+// visually-clear coin (placed ~0.19 m outside its cover's collider) isn't eaten by
+// the oversized AABB edge; occlusion (hide-spot gen) calls it with shrink=0.
+function segHitsBox(a, b, box, tMin = 0.03, tMax = 0.985, shrink = 0) {
+  const lo = [box.minX + shrink, box.minY ?? 0, box.minZ + shrink];
+  const hi = [box.maxX - shrink, box.maxY ?? box.y ?? 0, box.maxZ - shrink];
   let t0 = 0, t1 = 1;
   for (let i = 0; i < 3; i++) {
     const d = b[i] - a[i];
@@ -129,6 +132,8 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
   const HIT_RADIUS = 0.55;    // generous hunt hit sphere around each sat (m) — hunt, not a precision shooter
   const MAX_RANGE = 40;       // shot reach (m) — comfortably room-sized
   const RETURN_TRAVEL = 1.2;  // s for the catch -> vault flight (mirrors the burst tween)
+  const LOS_SHRINK = 0.22;    // inset (m) applied to collider AABBs for the SHOT's LOS only,
+                              // so a ray to a visually-clear coin isn't eaten by an oversized edge
 
   // green catch flash (one pooled additive sphere, reused per catch)
   let flashT = 0;
@@ -172,7 +177,8 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
     for (let i = 0; i < sats.length; i++) {
       const s = sats[i];
       if (s.state !== 'hidden' || caught.has(i)) continue;
-      const vx = s.spot.x - ox, vy = s.spot.y - oy, vz = s.spot.z - oz;
+      const p = s.mesh.position;                          // the VISIBLE coin (bob included) — what the player aims at
+      const vx = p.x - ox, vy = p.y - oy, vz = p.z - oz;
       const proj = vx * ax + vy * ay + vz * az;          // distance along ray to closest point
       if (proj <= 0 || proj > MAX_RANGE) continue;        // behind the muzzle / out of range
       const perp2 = (vx * vx + vy * vy + vz * vz) - proj * proj; // squared miss distance
@@ -181,13 +187,14 @@ export function createSats({ scene, vaultApi, coinObj, cover, seed = 1 }) {
     }
     if (best < 0) return null;
     const s = sats[best];
-    const a = [ox, oy, oz], b = [s.spot.x, s.spot.y, s.spot.z];
-    if ((cover.colliders || []).some((box) => segHitsBox(a, b, box, 0.02, 0.985))) return null; // wall/prop in the way
+    const p = s.mesh.position;
+    const a = [ox, oy, oz], b = [p.x, p.y, p.z];
+    if ((cover.colliders || []).some((box) => segHitsBox(a, b, box, 0.02, 0.985, LOS_SHRINK))) return null; // wall/prop in the way (edges relaxed)
     caught.add(best);                                      // scanner drops it (targets filters caught)
-    s.state = 'returning'; s.t = 0; s.rStart = s.spot.clone();
-    s.arc = 0.5 + s.spot.distanceTo(emit) * 0.12;
-    catchFlash.position.copy(s.spot); flashT = 1; catchFlash.visible = true;
-    return { index: best, pos: s.spot.clone() };
+    s.state = 'returning'; s.t = 0; s.rStart = p.clone();
+    s.arc = 0.5 + p.distanceTo(emit) * 0.12;
+    catchFlash.position.copy(p); flashT = 1; catchFlash.visible = true;
+    return { index: best, pos: p.clone() };
   }
 
   const tmp = new THREE.Vector3();
