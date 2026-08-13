@@ -78,7 +78,7 @@ const locomotion = createLocomotion({ rig, camera, input, collision, renderer })
 const vignette = createVignette({ camera });
 let pauseMenu = null; // set after modeswitcher (needs its exit path)
 const interaction = createInteraction({
-  renderer, scene, camera, input, canvas, isPaused: () => !!pauseMenu?.isOpen(),
+  renderer, scene, camera, rig, input, canvas, isPaused: () => !!pauseMenu?.isOpen(),
 });
 // Trigger/click/tap = fire(): muzzle flash + hoop pulse always; shoot-to-return on hit.
 interaction.setFireHook((hand) => { scangun?.resumeAudio(); scangun?.flash(); fireShot(hand); });
@@ -166,27 +166,34 @@ function updateReturnedHud(n) {
 }
 
 // ---- hand mounting (gun on the RIGHT grip, glove on the LEFT) ----
-// One robust, connected-driven path serves both viewmodels so there's no duplicated
-// mount logic: mountHandTo(hand, grip) puts the right thing on the right grip, and it's
-// called both on mode change (for already-connected controllers) and on every controller
-// (re)connect — which is what makes each viewmodel follow the real controller even though
-// the session-start mount runs before controllers connect.
+// The grip spaces are rig-parented, poll-driven Groups (see interaction.js), so mounting a
+// viewmodel to one guarantees it renders and tracks. Mounting is IDEMPOTENT and re-checked
+// every frame by ensureHandMounts(), so it can NOT depend on any connect event ever firing
+// (the event is only a fast path) NOR on the asset being loaded at connect time — whichever
+// frame both the grip is present and the viewmodel exists, the mount happens. This is the
+// belt-and-suspenders fix for "gun/glove absent on the real Quest."
 function isXR(mode = currentMode) { return mode === 'VR' || mode === 'AR'; } // hoisted: mountGun runs during modeswitcher init
 function mountHandTo(hand, grip) {
   if (!grip || !isXR()) return;
-  if (hand === 'right') scangun?.mountHand(grip);
-  else if (hand === 'left') leftHand?.mountHand(grip);
+  if (hand === 'right') { if (scangun && scangun.object.parent !== grip) scangun.mountHand(grip); }
+  else if (hand === 'left') { if (leftHand && leftHand.object.parent !== grip) leftHand.mountHand(grip); }
+}
+// Called every VR frame: mount each hand whose grip is present and whose viewmodel isn't yet
+// riding it. Guaranteed by the poll alone — no reliance on the connect event.
+function ensureHandMounts() {
+  if (!isXR()) return;
+  if (interaction.isConnected('right')) mountHandTo('right', interaction.getGrip('right'));
+  if (interaction.isConnected('left')) mountHandTo('left', interaction.getGrip('left'));
 }
 function mountGun(mode) {                              // (name kept; now mounts both hands)
   if (isXR(mode)) {
-    scangun?.unmount(); mountHandTo('right', interaction.getGrip('right'));
-    mountHandTo('left', interaction.getGrip('left'));
+    ensureHandMounts();                               // mount whatever's already present; poll re-tries the rest
   } else {
     scangun?.mountFlat(camera);                        // flat: gun viewmodel only, no glove
     leftHand?.unmount();
   }
 }
-interaction.onControllerConnected((hand, grip) => mountHandTo(hand, grip));
+interaction.onControllerConnected((hand, grip) => mountHandTo(hand, grip)); // fast path only
 
 // Control-bar buttons must not keep DOM focus: a focused <button> is activated by
 // Space/Enter, so jumping (Space) would re-fire the last-clicked control — e.g.
@@ -353,25 +360,74 @@ function updateGrab(dt, paused) {
   } else if (grab.isHeld()) grab.release();
 }
 
+// ---- in-VR diagnostic readout: device-side truth the emulated checks can't show ----
+// A tiny always-on panel in the headset reporting what actually reaches the game on-device:
+// input-source count, per-hand presence, gun/glove mounted, live stick magnitude, and the
+// last caught render-loop error. This is the reporting-from-the-device that turns a blind
+// strap-in/guess cycle into an informed one. (Hidden entirely in flat/mobile.)
+const vrDiag = (() => {
+  const W = 512, H = 116, cnv = document.createElement('canvas'); cnv.width = W; cnv.height = H;
+  const g2 = cnv.getContext('2d');
+  const tex = new THREE.CanvasTexture(cnv); tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.5, 0.5 * H / W),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, toneMapped: false, depthTest: false }),
+  );
+  mesh.renderOrder = 999; mesh.position.set(0, -0.34, -0.9); mesh.visible = false;
+  camera.add(mesh);
+  let lastErr = '';
+  const gripName = (obj) => (obj && obj.parent && obj.parent.name) || '';
+  function update() {
+    if (!renderer.xr.isPresenting) { mesh.visible = false; return; }
+    mesh.visible = true;
+    const ses = renderer.xr.getSession?.();
+    const n = ses ? ses.inputSources.length : 0;
+    const L = interaction.isConnected('left'), R = interaction.isConnected('right');
+    const gunM = gripName(scangun?.object) === 'grip-right';
+    const gloveM = gripName(leftHand?.object) === 'grip-left';
+    const mag = (input.state.moveMag || 0).toFixed(2);
+    g2.clearRect(0, 0, W, H); g2.fillStyle = 'rgba(4,12,8,0.82)'; g2.fillRect(0, 0, W, H);
+    g2.strokeStyle = '#19ff9b'; g2.lineWidth = 2; g2.strokeRect(2, 2, W - 4, H - 4);
+    g2.textBaseline = 'top'; g2.font = '20px monospace'; g2.fillStyle = '#7CFFC4';
+    g2.fillText(`src:${n}  L:${L ? 'ok' : '--'}  R:${R ? 'ok' : '--'}`, 12, 10);
+    g2.fillText(`gun:${gunM ? 'HAND' : '--'}  glove:${gloveM ? 'HAND' : '--'}  stick:${mag}`, 12, 40);
+    g2.fillStyle = lastErr ? '#ff6b6b' : '#3a6b52';
+    g2.fillText(lastErr ? `ERR ${lastErr}` : 'no errors', 12, 74);
+    tex.needsUpdate = true;
+  }
+  return { update, setErr(m) { lastErr = m ? String(m).slice(0, 46) : ''; } };
+})();
+
 // ---- render loop ----
 const clock = new THREE.Clock();
+let loopErrLogged = false;
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05); // clamp to avoid huge post-tab-switch steps
-  input.update();
-  pauseMenu?.update();
-  const paused = !!pauseMenu?.isOpen();
-  if (!paused) {
-    if (!modeswitcher.isInSession()) controls.update(); // flat mouse-look (turn)
-    locomotion.update(dt);                               // move / turn / jump / fly
+  try {
+    input.update();
+    pauseMenu?.update();
+    const paused = !!pauseMenu?.isOpen();
+    if (!paused) {
+      if (!modeswitcher.isInSession()) controls.update(); // flat mouse-look (turn)
+      locomotion.update(dt);                               // move / turn / jump / fly
+    }
+    interaction.update();                                  // lasers, select, fire hook (polls controllers)
+    if (renderer.xr.isPresenting) ensureHandMounts();      // guarantee gun/glove ride the live grips
+    updateGrab(dt, paused);                                // heavy crate drag (all modes)
+    vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
+    vaultApi?.updateVault(dt);
+    sats?.update(dt, clock.elapsedTime);
+    scanner.update(dt, scannerSample());                   // advance the signal seam (real: aim×proximity)...
+    scangun?.update(dt, clock.elapsedTime, paused);        // ...then drive all gun feedback
+    if (!paused) hunt?.update(dt);                          // 4:20 clock + win/lose flow
+    vrDiag.update();
+  } catch (e) {
+    // One bad frame must NOT blank the headset — log once, surface on the in-VR readout,
+    // and still render so the player keeps a live world instead of a frozen/black screen.
+    vrDiag.setErr(e?.message || e);
+    if (!loopErrLogged) { console.error('[loop] caught (recovered):', e); loopErrLogged = true; }
+    try { vrDiag.update(); } catch {}
   }
-  interaction.update();                                  // lasers, select, fire hook
-  updateGrab(dt, paused);                                // heavy crate drag (all modes)
-  vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
-  vaultApi?.updateVault(dt);
-  sats?.update(dt, clock.elapsedTime);
-  scanner.update(dt, scannerSample());                   // advance the signal seam (real: aim×proximity)...
-  scangun?.update(dt, clock.elapsedTime, paused);        // ...then drive all gun feedback
-  if (!paused) hunt?.update(dt);                          // 4:20 clock + win/lose flow
   if (renderer.xr.isPresenting) {
     renderer.render(scene, camera); // XR: direct path, no post
   } else {
@@ -399,6 +455,7 @@ window.__sat = {
     const paused = !!pauseMenu?.isOpen();
     if (!paused) { if (!modeswitcher.isInSession()) controls.update(); locomotion.update(dt); }
     interaction.update();
+    if (renderer.xr.isPresenting) ensureHandMounts();
     updateGrab(dt, paused);
   },
   // full logic+render frame (headless verification when rAF is throttled): mirrors

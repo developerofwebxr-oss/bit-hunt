@@ -1,51 +1,74 @@
 // Interaction — the laser/select foundation ("target and select").
-// Both VR controllers always emit a laser ray + reticle (targetRaySpace).
-// Trigger = click/select on world objects AND menu UI (raycast), and the right
-// trigger calls the gun fire() hook. Y = scanner ping (stub). Grabbing (all modes)
-// lives in grab.js/main.js (VR left grip / desktop E / mobile tap-hold).
-// On flat/mobile, the centred crosshair + click is the select equivalent.
+//
+// VR controller spaces are driven ENTIRELY by a per-frame poll of the live
+// session.inputSources (grip + target-ray poses via frame.getPose), parented to the
+// player RIG. We do NOT rely on three.js's `connected` event or its internal
+// input-source pairing — both proved unreliable on the real Quest (the event may never
+// fire for controllers already active at session start, and getControllerGrip(i) returns
+// an ORPHANED object that is never in the scene graph, so anything mounted to it can't
+// render). Poll-from-inputSources is handedness-correct (src.handedness) and always
+// tracks, so the gun/glove/laser are guaranteed regardless of event timing.
+//
+// Trigger = click/select on world objects AND menu UI (raycast); the right trigger also
+// calls the gun fire() hook. Y = scanner ping (stub). Grabbing (all modes) lives in
+// grab.js/main.js. On flat/mobile, the centred crosshair + click is the select equivalent.
 import * as THREE from 'three';
 import { hapticPulse } from './haptics.js';
 
-export function createInteraction({ renderer, scene, camera, input, canvas, isPaused = () => false }) {
+export function createInteraction({ renderer, scene, camera, rig, input, canvas, isPaused = () => false }) {
   const targets = [];                 // { object, onSelect, onHover }
   let fireHook = () => {};
 
   const raycaster = new THREE.Raycaster();
   const tmpMat = new THREE.Matrix4();
 
-  // ---- controller laser + reticle ----
-  function makeController(i, hand) {
-    const ctrl = renderer.xr.getController(i);
+  // ---- self-driven controller spaces (poll-based, parented to the rig) ----
+  const HANDS = ['left', 'right'];
+  const hands = {};                   // per-hand: { ray, grip, line, reticle, present, hovered }
+  for (const hand of HANDS) {
+    const ray = new THREE.Group();  ray.name = `ray-${hand}`;   ray.matrixAutoUpdate = false;
+    const grip = new THREE.Group(); grip.name = `grip-${hand}`; grip.matrixAutoUpdate = false;
     const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]);
     const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x19ff9b, transparent: true, opacity: 0.8 }));
-    line.scale.z = 5;
-    line.name = 'laser';
-    ctrl.add(line);
-    const reticle = new THREE.Mesh(
-      new THREE.SphereGeometry(0.02, 12, 12),
-      new THREE.MeshBasicMaterial({ color: 0x19ff9b }),
-    );
-    reticle.visible = false;
-    scene.add(reticle);
-    ctrl.userData = { hand, line, reticle, grip: renderer.xr.getControllerGrip(i) };
-    ctrl.visible = false; // until a real controller connects (no stray laser in flat)
-    scene.add(ctrl);
-    return ctrl;
+    line.scale.z = 5; line.name = 'laser';
+    ray.add(line);
+    const reticle = new THREE.Mesh(new THREE.SphereGeometry(0.02, 12, 12), new THREE.MeshBasicMaterial({ color: 0x19ff9b }));
+    reticle.visible = false; scene.add(reticle);       // reticle sits at a WORLD hit point
+    ray.visible = false;
+    (rig || scene).add(ray);                            // RIG-parented so hands follow locomotion
+    (rig || scene).add(grip);
+    hands[hand] = { ray, grip, line, reticle, present: false, hovered: null };
   }
-  const controllers = [makeController(0, 'right'), makeController(1, 'left')];
-  const connectCbs = new Set();   // notified (hand, gripSpace) whenever a controller connects
-  // handedness from the actual inputSource (index→hand isn't guaranteed on Quest/others)
-  controllers.forEach((c, i) => {
-    c.addEventListener('connected', (e) => {
-      if (e.data?.handedness) c.userData.hand = e.data.handedness;
-      else console.warn(`[interaction] controller ${i} connected with no handedness — using index guess "${c.userData.hand}"`);
-      c.userData.connected = true;
-      c.visible = true;
-      connectCbs.forEach((cb) => cb(c.userData.hand, c.userData.grip, c));
-    });
-    c.addEventListener('disconnected', () => { c.userData.connected = false; c.visible = false; c.userData.reticle.visible = false; });
-  });
+  const connectCbs = new Set();       // cb(hand, gripSpace, rayCtrl) fired on a fresh connect
+
+  // Pull the live grip + target-ray poses from the session every frame. This is the ONE
+  // source of truth for where the hands are; no event needed, no three.js controller used.
+  function pollControllers() {
+    for (const hand of HANDS) hands[hand].present = false;
+    const session = renderer.xr.getSession?.();
+    if (!session) return;
+    const frame = renderer.xr.getFrame?.();
+    const ref = renderer.xr.getReferenceSpace?.();
+    if (!frame || !ref) return;
+    if (rig) rig.updateMatrixWorld();                  // parent world current before we place children
+    for (const src of session.inputSources) {
+      const hand = src.handedness;
+      if (hand !== 'left' && hand !== 'right') continue;
+      const h = hands[hand];
+      const rp = src.targetRaySpace && frame.getPose(src.targetRaySpace, ref);
+      if (rp) { h.ray.matrix.fromArray(rp.transform.matrix); h.ray.updateMatrixWorld(true); }
+      const gp = src.gripSpace && frame.getPose(src.gripSpace, ref);
+      if (gp) { h.grip.matrix.fromArray(gp.transform.matrix); h.grip.updateMatrixWorld(true); }
+      const wasPresent = h._wasPresent;
+      h.present = true; h._wasPresent = true;
+      h.ray.visible = true;
+      if (!wasPresent) connectCbs.forEach((cb) => cb(hand, h.grip, h.ray)); // fresh connect → (re)mount
+    }
+    for (const hand of HANDS) {
+      const h = hands[hand];
+      if (!h.present) { h._wasPresent = false; h.ray.visible = false; h.reticle.visible = false; }
+    }
+  }
 
   function rayFrom(objMatrixWorld) {
     tmpMat.identity().extractRotation(objMatrixWorld);
@@ -53,11 +76,10 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
     raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMat).normalize();
   }
 
-  function pickFromController(ctrl) {
-    rayFrom(ctrl.matrixWorld);
+  function pickFromRay(rayObj) {
+    rayFrom(rayObj.matrixWorld);
     const objs = targets.map((t) => t.object).filter((o) => o.visible);
-    const hits = raycaster.intersectObjects(objs, true);
-    return hits[0] || null;
+    return raycaster.intersectObjects(objs, true)[0] || null;
   }
 
   function targetFor(object) {
@@ -107,16 +129,15 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
     if (s.scanner && !paused) scannerPing();   // Y = scanner ping stub (B is a free slot now)
 
     if (!renderer.xr.isPresenting) return;      // grabbing (all modes) lives in grab.js/main.js
-    for (const ctrl of controllers) {
-      const { hand, line, reticle } = ctrl.userData;
-      const hit = pickFromController(ctrl);
+    pollControllers();                          // refresh hand poses from the live session
+    for (const hand of HANDS) {
+      const h = hands[hand];
+      if (!h.present) continue;
+      const { line, reticle } = h;
+      const hit = pickFromRay(h.ray);
       // hover highlight: notify targets as the pointed row changes (menus light up)
       const hoveredT = hit ? targetFor(hit.object) : null;
-      if (hoveredT !== ctrl.userData.hoveredT) {
-        ctrl.userData.hoveredT?.onHover?.(false);
-        hoveredT?.onHover?.(true);
-        ctrl.userData.hoveredT = hoveredT;
-      }
+      if (hoveredT !== h.hovered) { h.hovered?.onHover?.(false); hoveredT?.onHover?.(true); h.hovered = hoveredT; }
       // laser length + reticle
       if (hit) { line.scale.z = hit.distance; reticle.visible = true; reticle.position.copy(hit.point); }
       else { line.scale.z = 5; reticle.visible = false; }
@@ -124,7 +145,7 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
       const selected = hand === 'right' ? s.selectR : s.selectL;
       if (selected) {
         if (hit) { const t = targetFor(hit.object); t?.onSelect?.(hit); }
-        else if (!paused) fireHook(hand, ctrl);
+        else if (!paused) fireHook(hand, h.ray);
         hapticPulse(renderer, { hand, intensity: 0.4, duration: 30 });
       }
     }
@@ -135,18 +156,13 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
     addTarget(object, onSelect, opts = {}) { targets.push({ object, onSelect, onHover: opts.onHover }); },
     removeTarget(object) { const i = targets.findIndex((t) => t.object === object); if (i >= 0) targets.splice(i, 1); },
     setFireHook(fn) { fireHook = fn || (() => {}); },
-    setLasersVisible(v) { for (const c of controllers) c.userData.line.visible = v; },
-    // the target-ray controller for a hand ('right'/'left') — the laser/pointer space
-    getController(hand) { return controllers.find((c) => c.userData.hand === hand && c.userData.connected) || controllers.find((c) => c.userData.hand === hand) || controllers[0]; },
-    // the GRIP space for a hand — natural "held object" pose; the gun rides this
-    getGrip(hand) {
-      const c = controllers.find((x) => x.userData.hand === hand && x.userData.connected)
-        || controllers.find((x) => x.userData.hand === hand);
-      if (!c) { console.warn(`[interaction] no "${hand}" controller — falling back to index 0`); return controllers[0].userData.grip; }
-      return c.userData.grip;
-    },
-    isConnected(hand) { return controllers.some((c) => c.userData.hand === hand && c.userData.connected); },
-    // subscribe to controller connects (fires cb(hand, gripSpace, ctrl)); returns an unsubscribe
+    setLasersVisible(v) { for (const hand of HANDS) hands[hand].line.visible = v; },
+    // the target-ray space for a hand ('right'/'left') — the laser/pointer origin
+    getController(hand) { return hands[hand]?.ray || hands.right.ray; },
+    // the GRIP space for a hand — natural "held object" pose; the gun/glove ride this
+    getGrip(hand) { return hands[hand]?.grip || hands.right.grip; },
+    isConnected(hand) { return !!hands[hand]?.present; },
+    // subscribe to controller connects (fires cb(hand, gripSpace, rayCtrl)); returns an unsubscribe
     onControllerConnected(cb) { connectCbs.add(cb); return () => connectCbs.delete(cb); },
   };
 }
