@@ -18,8 +18,8 @@ import { createPauseMenu } from './pausemenu.js';
 import { createVignette } from './vignette.js';
 import { createSats, SAT_COUNT } from './sats.js';
 import { createScanner } from './scanner.js';
-import { createScangun } from './scangun.js';
-import { createLeftHand } from './lefthand.js';
+import { createScangun, GUN_MOUNT_ROT } from './scangun.js';
+import { createLeftHand, HAND_MOUNT_ROT } from './lefthand.js';
 import { createGrab } from './grab.js';
 import { createHunt } from './hunt.js';
 import { hapticPulse } from './haptics.js';
@@ -122,10 +122,10 @@ document.getElementById('btn-pause')?.addEventListener('click', () => pauseMenu.
 const _so = new THREE.Vector3(), _sd = new THREE.Vector3(), _sm = new THREE.Matrix4();
 function aimRay() {
   if (renderer.xr.isPresenting) {
-    // VR: shoot along the GUN's forward (it rides the right grip), so the shot goes where
-    // the gun points. Fall back to the right controller if the gun isn't mounted yet.
-    const gun = scangun?.object;
-    const src = gun || interaction.getController('right');
+    // VR: the LASER (target-ray) is aim truth. Cast the shot from the target-ray pose so the hit
+    // ray is IDENTICAL to the laser by construction (grip pose is tilted ~45° on Quest, so the gun
+    // mesh's forward must NOT drive the shot — the gun is only visually aligned to this ray).
+    const src = interaction.getController('right');
     src.updateWorldMatrix?.(true, false);
     _so.setFromMatrixPosition(src.matrixWorld);
     _sm.identity().extractRotation(src.matrixWorld);
@@ -194,6 +194,33 @@ function mountGun(mode) {                              // (name kept; now mounts
   }
 }
 interaction.onControllerConnected((hand, grip) => mountHandTo(hand, grip)); // fast path only
+
+// ---- align hand viewmodels to the TARGET-RAY (fix the ~45° grip tilt) ----
+// The model rides the grip (correct fist position) but its ORIENTATION is set each frame so its
+// forward (-Z) is parallel to the laser: localQuat = gripWorldQuat⁻¹ · rayWorldQuat · baseOffset.
+// baseOffset (GUN/HAND_MOUNT_ROT, default 0) is the on-device fine-tune for the mesh's own axis.
+const _qGrip = new THREE.Quaternion(), _qRay = new THREE.Quaternion();
+const _gunBase = new THREE.Quaternion().setFromEuler(new THREE.Euler(GUN_MOUNT_ROT.x, GUN_MOUNT_ROT.y, GUN_MOUNT_ROT.z));
+const _handBase = new THREE.Quaternion().setFromEuler(new THREE.Euler(HAND_MOUNT_ROT.x, HAND_MOUNT_ROT.y, HAND_MOUNT_ROT.z));
+function alignModelToRay(model, hand, base) {
+  if (!model || model.parent !== interaction.getGrip(hand) || !interaction.isConnected(hand)) return;
+  interaction.getGrip(hand).getWorldQuaternion(_qGrip);
+  interaction.getController(hand).getWorldQuaternion(_qRay);
+  model.quaternion.copy(_qGrip).invert().multiply(_qRay).multiply(base);
+}
+function alignHandsToRay() {
+  if (!isXR()) return;
+  alignModelToRay(scangun?.object, 'right', _gunBase);
+  alignModelToRay(leftHand?.object, 'left', _handBase);
+}
+// angular gap between the gun's forward and the laser — logged/shown; ~0 once aligned.
+const _vGun = new THREE.Vector3(), _vRay = new THREE.Vector3(), _qTmp = new THREE.Quaternion();
+function aimDeltaDeg() {
+  if (!isXR() || !scangun?.object || !interaction.isConnected('right')) return null;
+  _vGun.set(0, 0, -1).applyQuaternion(scangun.object.getWorldQuaternion(_qTmp));
+  _vRay.set(0, 0, -1).applyQuaternion(interaction.getController('right').getWorldQuaternion(_qTmp));
+  return THREE.MathUtils.radToDeg(_vGun.angleTo(_vRay));
+}
 
 // Control-bar buttons must not keep DOM focus: a focused <button> is activated by
 // Space/Enter, so jumping (Space) would re-fire the last-clicked control — e.g.
@@ -336,27 +363,32 @@ function updateGrab(dt, paused) {
   if (paused) { if (grab.isHeld()) grab.release(); return; }
   const s = input.state;
   if (renderer.xr.isPresenting) {
-    // VR: squeeze the LEFT grip while the glove is near a crate → grab; drag toward the hand.
+    // VR: squeeze the LEFT grip while the glove is near a crate → grab; the crate then follows the
+    // hand's MOVEMENT at the grabbed offset (push/pull/side), not crawling toward the hand.
     const gripL = interaction.getGrip('left');
     if (s.gripL && gripL) {
       gripL.getWorldPosition(_gp);
       if (!grab.isHeld()) {
         const p = grab.pickNearest(_gp.x, _gp.z);
-        if (p) { grab.grab(p); hapticPulse(renderer, { hand: 'left', intensity: 0.6, duration: 40 }); }
+        if (p) { grab.grab(p, _gp.x, _gp.z); hapticPulse(renderer, { hand: 'left', intensity: 0.6, duration: 40 }); }
       }
       if (grab.isHeld()) grab.drag(dt, _gp.x, _gp.z);
     } else if (grab.isHeld()) grab.release();
     return;
   }
-  // mobile: promote a held tap to a grab once past the hold threshold
+  // desktop (E / right-click) or an active mobile grab: the "controller point" is the looked-at
+  // floor point; the crate holds its grabbed offset from it, so it moves in every direction.
   if (mobileGrab.pending && !mobileGrab.active && (performance.now() - mobileGrab.pending.t0) > MOBILE_HOLD_MS) {
-    grab.grab(mobileGrab.pending.prop); mobileGrab.active = true;
+    mobileGrab.active = true; // the block below grabs pending.prop once we have the floor point
   }
-  // desktop (E / right-click) or an active mobile grab: drag toward the looked-at floor point
   if (s.grabFlat || mobileGrab.active) {
     camera.getWorldPosition(_go); camera.getWorldDirection(_gd);
-    if (!grab.isHeld()) { const p = grab.pickRay(_go, _gd, 2.5); if (p) grab.grab(p); }
-    if (grab.isHeld()) { const t = floorTarget(_go, _gd, 2.5); grab.drag(dt, t.x, t.z); }
+    const t = floorTarget(_go, _gd, 2.5);
+    if (!grab.isHeld()) {
+      const p = mobileGrab.active ? mobileGrab.pending?.prop : grab.pickRay(_go, _gd, 2.5);
+      if (p) grab.grab(p, t.x, t.z);
+    }
+    if (grab.isHeld()) grab.drag(dt, t.x, t.z);
   } else if (grab.isHeld()) grab.release();
 }
 
@@ -386,11 +418,13 @@ const vrDiag = (() => {
     const gunM = gripName(scangun?.object) === 'grip-right';
     const gloveM = gripName(leftHand?.object) === 'grip-left';
     const mag = (input.state.moveMag || 0).toFixed(2);
+    const spr = input.state.sprint ? 'SPRINT' : 'walk';
+    const dd = aimDeltaDeg();
     g2.clearRect(0, 0, W, H); g2.fillStyle = 'rgba(4,12,8,0.82)'; g2.fillRect(0, 0, W, H);
     g2.strokeStyle = '#19ff9b'; g2.lineWidth = 2; g2.strokeRect(2, 2, W - 4, H - 4);
     g2.textBaseline = 'top'; g2.font = '20px monospace'; g2.fillStyle = '#7CFFC4';
-    g2.fillText(`src:${n}  L:${L ? 'ok' : '--'}  R:${R ? 'ok' : '--'}`, 12, 10);
-    g2.fillText(`gun:${gunM ? 'HAND' : '--'}  glove:${gloveM ? 'HAND' : '--'}  stick:${mag}`, 12, 40);
+    g2.fillText(`src:${n}  L:${L ? 'ok' : '--'}  R:${R ? 'ok' : '--'}  gun:${gunM ? 'HAND' : '--'} glove:${gloveM ? 'HAND' : '--'}`, 12, 10);
+    g2.fillText(`stick:${mag} ${spr}   aimΔ:${dd == null ? '--' : dd.toFixed(1) + '°'}`, 12, 40);
     g2.fillStyle = lastErr ? '#ff6b6b' : '#3a6b52';
     g2.fillText(lastErr ? `ERR ${lastErr}` : 'no errors', 12, 74);
     tex.needsUpdate = true;
@@ -412,7 +446,7 @@ renderer.setAnimationLoop(() => {
       locomotion.update(dt);                               // move / turn / jump / fly
     }
     interaction.update();                                  // lasers, select, fire hook (polls controllers)
-    if (renderer.xr.isPresenting) ensureHandMounts();      // guarantee gun/glove ride the live grips
+    if (renderer.xr.isPresenting) { ensureHandMounts(); alignHandsToRay(); } // mount + barrel∥laser
     updateGrab(dt, paused);                                // heavy crate drag (all modes)
     vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
     vaultApi?.updateVault(dt);
@@ -455,7 +489,7 @@ window.__sat = {
     const paused = !!pauseMenu?.isOpen();
     if (!paused) { if (!modeswitcher.isInSession()) controls.update(); locomotion.update(dt); }
     interaction.update();
-    if (renderer.xr.isPresenting) ensureHandMounts();
+    if (renderer.xr.isPresenting) { ensureHandMounts(); alignHandsToRay(); }
     updateGrab(dt, paused);
   },
   // full logic+render frame (headless verification when rAF is throttled): mirrors

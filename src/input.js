@@ -124,7 +124,7 @@ export function createInput({ renderer, canvas }) {
     if (!session) return false;
     let sawController = false;
     let mx = 0, my = 0, turn = 0;
-    let jump = false, flyToggle = false, pause = false, scanner = false;
+    let jump = false, flyToggle = false, pause = false, scanner = false, sprint = false;
     let selectL = false, selectR = false;
     let gripL = false, gripR = false, triggerL = false, triggerR = false, tvL = 0, tvR = 0;
 
@@ -143,6 +143,7 @@ export function createInput({ renderer, canvas }) {
       if (hand === 'left') {
         mx = stickX; my = -stickY;          // forward = stick up (-Y)
         triggerL = trigPressed; tvL = trig; gripL = gripPressed;
+        if (gp.buttons[3]?.pressed) sprint = true;        // LEFT stick CLICK (held) → sprint
         if (pressedEdge('left', 0, gp)) selectL = true;
         if (pressedEdge('left', 4, gp)) pause = true;     // X → pause/menu
         if (pressedEdge('left', 5, gp)) scanner = true;   // Y → scanner stub
@@ -158,11 +159,12 @@ export function createInput({ renderer, canvas }) {
     if (!sawController) return false;
 
     const mag = Math.min(1, Math.hypot(mx, my));
-    // log the escalating peak stick magnitude so full-deflection can be read on-device
-    if (mag > vrPeakMag + 0.02) { vrPeakMag = mag; console.log(`[input] VR stick peak magnitude ${mag.toFixed(3)} (sprint ≥ ${SPRINT_MAG})`); }
+    // log the escalating peak stick magnitude so full-deflection can be read on-device (diagnosis:
+    // is a "normal" push already near 1.0? then a magnitude threshold would read as always-sprint)
+    if (mag > vrPeakMag + 0.02) { vrPeakMag = mag; console.log(`[input] VR stick peak magnitude ${mag.toFixed(3)} — walk scales with this; sprint = L-stick click`); }
     state.source = 'vr';
     state.move.x = mx; state.move.y = my; state.moveMag = mag;
-    state.sprint = false;             // VR sprint is sustained full-push (handled in locomotion)
+    state.sprint = sprint;            // VR sprint = LEFT stick click held (a clean binary, no threshold)
     state.turn = turn;
     state.jump = jump; state.flyToggle = flyToggle; state.pause = pause;
     state.scanner = scanner;
@@ -188,7 +190,8 @@ export function createInput({ renderer, canvas }) {
     const mag = Math.min(1, Math.hypot(x, y));
     if (mag > 1e-3) { x /= Math.max(1, mag); y /= Math.max(1, mag); }
     state.move.x = x; state.move.y = y; state.moveMag = mag;
-    state.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    // desktop = Shift; mobile = push the joystick to the edge (unchanged). VR sprint is the L-stick click.
+    state.sprint = keys.has('ShiftLeft') || keys.has('ShiftRight') || (state.source === 'mobile' && mag > 0.92);
     state.turn = 0; // flat turn is mouse-look (controls.js)
 
     state.jump = edgeBuf.jump;

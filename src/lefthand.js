@@ -9,6 +9,9 @@ import { loadRaw } from './assets.js';
 export const VR_HAND_SCALE = 0.20;                 // hand-sized (glove is ~1.13 m long raw)
 export const VR_HAND_ROT = { x: 0, y: 0, z: 0 };   // 0 = fingers forward, palm down; roll z for palm-inward
 export const VR_HAND_POS = { x: 0.01, y: -0.02, z: 0.02 }; // grip → palm nudge
+// Corrective offset when the glove is aligned to the TARGET-RAY (grip is tilted ~45° up on Quest).
+// 0 = fingers point along the laser; tweak on-device for a natural wrist angle (radians).
+export const HAND_MOUNT_ROT = { x: 0, y: 0, z: 0 };
 
 export async function createLeftHand({ scene }) {
   const glove = await loadRaw('left-hand.glb');

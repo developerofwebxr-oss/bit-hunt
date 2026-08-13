@@ -5,7 +5,7 @@
 // Jump = modest hop + gravity, single-gate, lands on floor/catwalk/stairs.
 // Fly = right-stick click, behind ENABLE_FLY (default OFF for the hunt).
 import * as THREE from 'three';
-import { comfort, SPEED, SNAP_TURN_DEG, SPRINT_MAG, SPRINT_HOLD } from './comfort.js';
+import { comfort, SPEED, SNAP_TURN_DEG } from './comfort.js';
 import { hapticPulse } from './haptics.js';
 
 // Fly OFF by default: in a hunt where sats hide behind/under cover, floating
@@ -24,7 +24,6 @@ export function createLocomotion({ rig, camera, input, collision, renderer }) {
   let flying = false;
   let enableFly = ENABLE_FLY; // mutable seam; default OFF (the const) for this game
   let turnVel = 0;
-  let sprintTimer = 0;
   let snapArmed = false;
 
   const fwd = new THREE.Vector3();
@@ -80,13 +79,11 @@ export function createLocomotion({ rig, camera, input, collision, renderer }) {
       right.copy(fwd).cross(UP).normalize(); // right = forward × up
     }
 
-    // ---- speed from magnitude (sustained full deflection → sprint) ----
-    // Auto-sprint is for ANALOG sticks (VR / mobile joystick); digital keyboard
-    // always reads "full", so desktop sprints only with Shift (s.sprint).
-    const analog = s.source === 'vr' || s.source === 'mobile';
-    if (analog && s.moveMag >= SPRINT_MAG) sprintTimer += dt; else sprintTimer = 0;
-    const sprinting = s.sprint || (analog && sprintTimer >= SPRINT_HOLD);
-    const speed = sprinting ? SPEED.run : SPEED.walk * Math.min(1, s.moveMag / 0.9);
+    // ---- speed: walk SCALES with stick deflection (gentle push = slow creep, full push = full
+    // walk), so there's real slow-vs-fast control; sprint is a clean BINARY (no magnitude
+    // threshold that a normal push trips): VR = left-stick click, desktop = Shift, mobile = edge.
+    const sprinting = s.sprint;
+    const speed = sprinting ? SPEED.run : SPEED.walk * Math.min(1, s.moveMag);
 
     // ---- apply planar (or 3D, if flying) movement ----
     const move = new THREE.Vector3();

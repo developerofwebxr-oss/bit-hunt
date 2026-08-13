@@ -27,6 +27,10 @@ const GREEN = 0x19ff9b;
 const FLAT_GUN_SCALE = 0.32;   // bottom-right viewmodel
 const VR_GUN_SCALE = 0.45;     // ~1.5× the old 0.30 (bump to ~0.60 for 2×) — held-in-hand size
 const BOLT_REACH = 1.05;       // muzzle-bolt length (m); ~2× the old ~0.5 so it reads in VR
+// Corrective offset applied when the gun is visually aligned to the TARGET-RAY (the grip pose is
+// tilted ~45° up on Quest). 0 = barrel parallel to the laser; tweak on-device if the mesh's own
+// axis isn't dead-on -Z (radians).
+export const GUN_MOUNT_ROT = { x: 0, y: 0, z: 0 };
 
 export async function createScangun({ scene, scanner }) {
   const shell = await loadRaw('scangun.glb');

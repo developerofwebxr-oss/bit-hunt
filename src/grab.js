@@ -15,6 +15,7 @@ const GRAB_NEAR = 0.55;   // VR: hand-to-prop distance to grab (m)
 export function createGrab({ collision, roomHalf = 7 }) {
   const props = [];       // { mesh, box, orig:{x,z}, half }
   let held = null;
+  let offX = 0, offZ = 0; // grabbed offset (crate center − controller point) so drag isn't pull-only
   const ray = new THREE.Raycaster();
 
   function register(prop) { props.push(prop); }
@@ -38,7 +39,17 @@ export function createGrab({ collision, roomHalf = 7 }) {
     return props.find((p) => p.mesh === obj || obj.parent === p.mesh) || null;
   }
 
-  function grab(prop) { held = prop || null; return !!held; }
+  // Grab AT a controller point (hand XZ in VR; looked-at floor point on desktop/mobile) so we can
+  // record the offset from the crate. While held the crate keeps that offset from the moving point,
+  // so pushing/pulling/strafing all move it — not the pull-only "target the hand directly".
+  function grab(prop, px = null, pz = null) {
+    held = prop || null;
+    if (held && px != null) {
+      const cx = (held.box.minX + held.box.maxX) / 2, cz = (held.box.minZ + held.box.maxZ) / 2;
+      offX = cx - px; offZ = cz - pz;
+    } else { offX = offZ = 0; }
+    return !!held;
+  }
   function release() { held = null; }        // Y is already floor-bound, so it just stops
   const isHeld = () => !!held;
 
@@ -65,9 +76,11 @@ export function createGrab({ collision, roomHalf = 7 }) {
     prop.mesh.position.x = x; prop.mesh.position.z = z; // Y stays at the floor base
   }
 
-  // heavy damped follow toward the target floor point (tx,tz)
-  function drag(dt, tx, tz) {
+  // heavy damped follow. (px,pz) is the live controller point; the crate targets it PLUS the
+  // offset captured at grab, so it holds its grabbed distance/direction (push/pull/side all work).
+  function drag(dt, px, pz) {
     if (!held) return;
+    const tx = px + offX, tz = pz + offZ;
     const cx = (held.box.minX + held.box.maxX) / 2, cz = (held.box.minZ + held.box.maxZ) / 2;
     const a = 1 - Math.exp(-FOLLOW_K * dt);
     let nx = cx + (tx - cx) * a, nz = cz + (tz - cz) * a;
