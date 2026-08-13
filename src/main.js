@@ -99,12 +99,16 @@ const modeswitcher = createModeSwitcher({
       scene.background = new THREE.Color(0x05100b);
     }
     mountGun(mode);                                // hand-mount in XR, viewmodel in flat
+    // Free look is a flat-mode concept — the whole #controls bar is hidden in XR (CSS
+    // body.xr-active), and we also disable/grey the button so it's inert if ever shown.
+    document.getElementById('btn-freelook')?.toggleAttribute('disabled', inXR);
     environment?.applyMode(mode);                  // AR shell-off + collision bounds
   },
 });
 pauseMenu = createPauseMenu({
   input, camera, renderer, interaction,
   onExit: () => modeswitcher.exitToScreen(),       // X menu "Exit to screen mode"
+  getHunt: () => hunt,                             // enables the in-VR Start/Reset Hunt row
 });
 // on-screen menu button (flat/mobile) → same as Left-X
 document.getElementById('btn-pause')?.addEventListener('click', () => pauseMenu.toggle());
@@ -114,9 +118,13 @@ document.getElementById('btn-pause')?.addEventListener('click', () => pauseMenu.
 const _so = new THREE.Vector3(), _sd = new THREE.Vector3(), _sm = new THREE.Matrix4();
 function aimRay() {
   if (renderer.xr.isPresenting) {
-    const c = interaction.getController('right');   // gun rides this controller
-    c.getWorldPosition(_so);
-    _sm.identity().extractRotation(c.matrixWorld);
+    // VR: shoot along the GUN's forward (it rides the right grip), so the shot goes where
+    // the gun points. Fall back to the right controller if the gun isn't mounted yet.
+    const gun = scangun?.object;
+    const src = gun || interaction.getController('right');
+    src.updateWorldMatrix?.(true, false);
+    _so.setFromMatrixPosition(src.matrixWorld);
+    _sm.identity().extractRotation(src.matrixWorld);
     _sd.set(0, 0, -1).applyMatrix4(_sm).normalize();
   } else {
     camera.getWorldPosition(_so);                    // flat: aim = where you look (crosshair)
@@ -157,9 +165,15 @@ function updateReturnedHud(n) {
 function mountGun(mode) {
   if (!scangun) return;
   scangun.unmount();
-  if (mode === 'VR' || mode === 'AR') scangun.mountHand(interaction.getController('right'));
+  if (mode === 'VR' || mode === 'AR') scangun.mountHand(interaction.getGrip('right')); // right controller grip
   else scangun.mountFlat(camera);
 }
+// Robust hand mount: whenever a controller (re)connects, if it's the right hand and we're
+// in an immersive session, (re)mount the gun to its grip. This is what makes the gun follow
+// the real controller even though the mount at session-start ran before controllers connected.
+interaction.onControllerConnected((hand, grip) => {
+  if (hand === 'right' && scangun && (currentMode === 'VR' || currentMode === 'AR')) scangun.mountHand(grip);
+});
 
 // Control-bar buttons must not keep DOM focus: a focused <button> is activated by
 // Space/Enter, so jumping (Space) would re-fire the last-clicked control — e.g.
@@ -229,7 +243,7 @@ Promise.all([
       g.setMuted(!comfort.get('sound'));           // honor the persisted scanner-sound setting
       mountGun(currentMode);                       // viewmodel now; re-mounts on XR entry
       // ---- Hunt: the 4:20 clock + win/lose flow (owns timer HUD + overlay + start button) ----
-      hunt = createHunt({ sats, vaultApi: v, scangun: g, total: SAT_COUNT, setReturnedHud: updateReturnedHud });
+      hunt = createHunt({ sats, vaultApi: v, scangun: g, total: SAT_COUNT, setReturnedHud: updateReturnedHud, renderer, camera, interaction });
       modeswitcher.setStatus('ready · press Start Hunt (H)');
       reportStats();
     });

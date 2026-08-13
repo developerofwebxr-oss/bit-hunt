@@ -5,7 +5,7 @@
 // Jump = modest hop + gravity, single-gate, lands on floor/catwalk/stairs.
 // Fly = right-stick click, behind ENABLE_FLY (default OFF for the hunt).
 import * as THREE from 'three';
-import { comfort, SPEED, SNAP_TURN_DEG } from './comfort.js';
+import { comfort, SPEED, SNAP_TURN_DEG, SPRINT_MAG, SPRINT_HOLD } from './comfort.js';
 import { hapticPulse } from './haptics.js';
 
 // Fly OFF by default: in a hunt where sats hide behind/under cover, floating
@@ -84,8 +84,8 @@ export function createLocomotion({ rig, camera, input, collision, renderer }) {
     // Auto-sprint is for ANALOG sticks (VR / mobile joystick); digital keyboard
     // always reads "full", so desktop sprints only with Shift (s.sprint).
     const analog = s.source === 'vr' || s.source === 'mobile';
-    if (analog && s.moveMag > 0.92) sprintTimer += dt; else sprintTimer = 0;
-    const sprinting = s.sprint || (analog && sprintTimer > 0.3);
+    if (analog && s.moveMag >= SPRINT_MAG) sprintTimer += dt; else sprintTimer = 0;
+    const sprinting = s.sprint || (analog && sprintTimer >= SPRINT_HOLD);
     const speed = sprinting ? SPEED.run : SPEED.walk * Math.min(1, s.moveMag / 0.9);
 
     // ---- apply planar (or 3D, if flying) movement ----

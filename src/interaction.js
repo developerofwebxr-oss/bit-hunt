@@ -38,14 +38,18 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
     return ctrl;
   }
   const controllers = [makeController(0, 'right'), makeController(1, 'left')];
-  // handedness from the actual inputSource (index→hand isn't guaranteed)
-  for (const c of controllers) {
+  const connectCbs = new Set();   // notified (hand, gripSpace) whenever a controller connects
+  // handedness from the actual inputSource (index→hand isn't guaranteed on Quest/others)
+  controllers.forEach((c, i) => {
     c.addEventListener('connected', (e) => {
       if (e.data?.handedness) c.userData.hand = e.data.handedness;
+      else console.warn(`[interaction] controller ${i} connected with no handedness — using index guess "${c.userData.hand}"`);
+      c.userData.connected = true;
       c.visible = true;
+      connectCbs.forEach((cb) => cb(c.userData.hand, c.userData.grip, c));
     });
-    c.addEventListener('disconnected', () => { c.visible = false; c.userData.reticle.visible = false; });
-  }
+    c.addEventListener('disconnected', () => { c.userData.connected = false; c.visible = false; c.userData.reticle.visible = false; });
+  });
 
   function rayFrom(objMatrixWorld) {
     tmpMat.identity().extractRotation(objMatrixWorld);
@@ -119,6 +123,13 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
         const { hand, line, reticle } = ctrl.userData;
         const grabbed = held[hand];
         const hit = grabbed ? null : pickFromController(ctrl);
+        // hover highlight: notify targets as the pointed row changes (so menus can light up)
+        const hoveredT = hit ? targetFor(hit.object) : null;
+        if (hoveredT !== ctrl.userData.hoveredT) {
+          ctrl.userData.hoveredT?.onHover?.(false);
+          hoveredT?.onHover?.(true);
+          ctrl.userData.hoveredT = hoveredT;
+        }
         // laser length + reticle
         if (hit) {
           line.scale.z = hit.distance;
@@ -167,12 +178,22 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
 
   return {
     update,
-    addTarget(object, onSelect, opts = {}) { targets.push({ object, onSelect, grabbable: !!opts.grabbable }); },
+    addTarget(object, onSelect, opts = {}) { targets.push({ object, onSelect, onHover: opts.onHover, grabbable: !!opts.grabbable }); },
     removeTarget(object) { const i = targets.findIndex((t) => t.object === object); if (i >= 0) targets.splice(i, 1); },
     setFireHook(fn) { fireHook = fn || (() => {}); },
     get builderMode() { return builderMode; },
     setLasersVisible(v) { for (const c of controllers) c.userData.line.visible = v; },
-    // the target-ray controller for a hand ('right'/'left') — used to mount the gun
-    getController(hand) { return controllers.find((c) => c.userData.hand === hand) || controllers[0]; },
+    // the target-ray controller for a hand ('right'/'left') — the laser/pointer space
+    getController(hand) { return controllers.find((c) => c.userData.hand === hand && c.userData.connected) || controllers.find((c) => c.userData.hand === hand) || controllers[0]; },
+    // the GRIP space for a hand — natural "held object" pose; the gun rides this
+    getGrip(hand) {
+      const c = controllers.find((x) => x.userData.hand === hand && x.userData.connected)
+        || controllers.find((x) => x.userData.hand === hand);
+      if (!c) { console.warn(`[interaction] no "${hand}" controller — falling back to index 0`); return controllers[0].userData.grip; }
+      return c.userData.grip;
+    },
+    isConnected(hand) { return controllers.some((c) => c.userData.hand === hand && c.userData.connected); },
+    // subscribe to controller connects (fires cb(hand, gripSpace, ctrl)); returns an unsubscribe
+    onControllerConnected(cb) { connectCbs.add(cb); return () => connectCbs.delete(cb); },
   };
 }

@@ -12,10 +12,13 @@
 // Edge flags (jump, flyToggle, pause, builder, scanner, selectL/R) are true for
 // exactly one frame; held flags (move, turn, grips, triggers) reflect now.
 
+import { SPRINT_MAG } from './comfort.js';
+
 const DEAD = 0.15;
 const applyDead = (v) => (Math.abs(v) < DEAD ? 0 : v);
 
 export function createInput({ renderer, canvas }) {
+  let vrPeakMag = 0;   // logged so the Quest's full-deflection magnitude is observable
   const state = {
     source: 'flat',            // 'flat' | 'mobile' | 'vr'
     move: { x: 0, y: 0 },       // x = strafe (+right), y = forward (+fwd)
@@ -157,9 +160,11 @@ export function createInput({ renderer, canvas }) {
     if (!sawController) return false;
 
     const mag = Math.min(1, Math.hypot(mx, my));
+    // log the escalating peak stick magnitude so full-deflection can be read on-device
+    if (mag > vrPeakMag + 0.02) { vrPeakMag = mag; console.log(`[input] VR stick peak magnitude ${mag.toFixed(3)} (sprint ≥ ${SPRINT_MAG})`); }
     state.source = 'vr';
     state.move.x = mx; state.move.y = my; state.moveMag = mag;
-    state.sprint = mag > 0.92;
+    state.sprint = false;             // VR sprint is sustained full-push (handled in locomotion)
     state.turn = turn;
     state.jump = jump; state.flyToggle = flyToggle; state.pause = pause;
     state.builder = builder; state.scanner = scanner;

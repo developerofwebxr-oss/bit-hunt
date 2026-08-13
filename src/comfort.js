@@ -13,6 +13,10 @@ const DEFAULTS = {
 // Fixed locomotion speeds (shared source of truth; NOT user-tunable).
 export const SPEED = { walk: 1.4, run: 2.8 };
 export const SNAP_TURN_DEG = 45;
+// Analog sprint: full-stick magnitude ≥ SPRINT_MAG sustained ≥ SPRINT_HOLD s → run.
+// 0.85 (was 0.92) tolerates Quest sticks that peak just under 1.0 after the deadzone.
+export const SPRINT_MAG = 0.85;
+export const SPRINT_HOLD = 0.15;
 
 function load() {
   try {

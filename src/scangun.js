@@ -23,6 +23,11 @@ const HOOP   = { x: 0, y: 0.50, z: -0.32, r: 0.052, tube: 0.006 };
 const MUZZLE = { x: 0, y: 0.30, z: -0.60 };
 const GREEN = 0x19ff9b;
 
+// ---- tunables ----
+const FLAT_GUN_SCALE = 0.32;   // bottom-right viewmodel
+const VR_GUN_SCALE = 0.45;     // ~1.5× the old 0.30 (bump to ~0.60 for 2×) — held-in-hand size
+const BOLT_REACH = 1.05;       // muzzle-bolt length (m); ~2× the old ~0.5 so it reads in VR
+
 export async function createScangun({ scene, scanner }) {
   const shell = await loadRaw('scangun.glb');
   const gun = new THREE.Group();
@@ -130,7 +135,7 @@ export async function createScangun({ scene, scanner }) {
       if (targetWorld && i === 0) {
         writeBolt(bolts[i], fx, fy, fz, targetWorld.x, targetWorld.y, targetWorld.z, 0.06);
       } else {
-        const reach = 0.5 + Math.random() * 0.35;
+        const reach = BOLT_REACH + Math.random() * BOLT_REACH * 0.6;
         _end.set(fx + fwx * reach + (Math.random() * 2 - 1) * 0.12,
                  fy + fwy * reach + (Math.random() * 2 - 1) * 0.12,
                  fz + fwz * reach + (Math.random() * 2 - 1) * 0.12);
@@ -276,18 +281,19 @@ export async function createScangun({ scene, scanner }) {
   function mountFlat(camera) {
     mode = 'flat';
     camera.add(gun);
-    gun.scale.setScalar(0.32);
+    gun.scale.setScalar(FLAT_GUN_SCALE);
     gun.position.set(0.125, -0.135, -0.30);      // bottom-right viewmodel, screen readable
     gun.rotation.set(0.11, -0.16, 0);            // muzzle-up + inward yaw tilts screen toward eye
     baseState.pos.copy(gun.position);
     baseState.quat.copy(gun.quaternion);
   }
-  function mountHand(controller) {
+  // mount into a controller's GRIP space (WebXR grip: -Z ≈ where a held object points),
+  // so the gun sits in the hand with the muzzle forward. Orientation unchanged (no flip).
+  function mountHand(gripSpace) {
     mode = 'vr';
-    controller.add(gun);
-    gun.scale.setScalar(0.30);
-    // grip (local ~0,0,0.28) sits near the controller origin; muzzle points -Z (aim ray)
-    gun.position.set(0, -0.02, -0.05);
+    gripSpace.add(gun);
+    gun.scale.setScalar(VR_GUN_SCALE);
+    gun.position.set(0, -0.03, -0.07);           // nudge so the grip sits in the palm
     gun.rotation.set(0, 0, 0);
   }
   function unmount() { if (gun.parent) gun.parent.remove(gun); }
