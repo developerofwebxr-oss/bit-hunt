@@ -1,22 +1,18 @@
-// Interaction — the laser/grip foundation ("target and select").
+// Interaction — the laser/select foundation ("target and select").
 // Both VR controllers always emit a laser ray + reticle (targetRaySpace).
-// Trigger = click/select on world objects AND menu UI (raycast). Grip = grab &
-// move objects (used by builder mode). B = builder toggle (stub), Y = scanner
-// ping (stub). Triggers also call a fire() hook for the future gun (placeholder).
+// Trigger = click/select on world objects AND menu UI (raycast), and the right
+// trigger calls the gun fire() hook. Y = scanner ping (stub). Grabbing (all modes)
+// lives in grab.js/main.js (VR left grip / desktop E / mobile tap-hold).
 // On flat/mobile, the centred crosshair + click is the select equivalent.
 import * as THREE from 'three';
 import { hapticPulse } from './haptics.js';
 
 export function createInteraction({ renderer, scene, camera, input, canvas, isPaused = () => false }) {
-  const targets = [];                 // { object, onSelect, grabbable }
+  const targets = [];                 // { object, onSelect, onHover }
   let fireHook = () => {};
-  let builderMode = false;
-  const builderEl = document.getElementById('builder-indicator');
 
   const raycaster = new THREE.Raycaster();
   const tmpMat = new THREE.Matrix4();
-  const held = { left: null, right: null }; // grabbed object per hand (VR)
-  let heldFlat = null;                       // grabbed object (desktop/mobile)
 
   // ---- controller laser + reticle ----
   function makeController(i, hand) {
@@ -88,11 +84,6 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
   });
 
   // ---- stubs ----
-  function setBuilder(on) {
-    builderMode = on;
-    if (builderEl) { builderEl.textContent = `Builder: ${on ? 'ON' : 'off'}`; builderEl.classList.toggle('show', on); }
-    console.log('[builder] mode', on ? 'ON' : 'off');
-  }
   let audioCtx = null;
   function scannerPing() {
     console.log('[scanner] ping (stub — reveal logic comes with the hunt)');
@@ -113,75 +104,37 @@ export function createInteraction({ renderer, scene, camera, input, canvas, isPa
     const s = input.state;
     const paused = isPaused();
 
-    // B / Y stubs (work in VR via buttons and in flat via keys for testing).
-    // Gated while the pause menu is open so menu clicks don't double-fire.
-    if (s.builder && !paused) setBuilder(!builderMode);
-    if (s.scanner && !paused) scannerPing();
+    if (s.scanner && !paused) scannerPing();   // Y = scanner ping stub (B is a free slot now)
 
-    if (renderer.xr.isPresenting) {
-      for (const ctrl of controllers) {
-        const { hand, line, reticle } = ctrl.userData;
-        const grabbed = held[hand];
-        const hit = grabbed ? null : pickFromController(ctrl);
-        // hover highlight: notify targets as the pointed row changes (so menus can light up)
-        const hoveredT = hit ? targetFor(hit.object) : null;
-        if (hoveredT !== ctrl.userData.hoveredT) {
-          ctrl.userData.hoveredT?.onHover?.(false);
-          hoveredT?.onHover?.(true);
-          ctrl.userData.hoveredT = hoveredT;
-        }
-        // laser length + reticle
-        if (hit) {
-          line.scale.z = hit.distance;
-          reticle.visible = true;
-          reticle.position.copy(hit.point);
-        } else {
-          line.scale.z = grabbed ? 0.01 : 5;
-          reticle.visible = false;
-        }
-        // trigger = select (always, so menu UI is clickable) + fire hook (gated)
-        const selected = hand === 'right' ? s.selectR : s.selectL;
-        if (selected) {
-          if (hit) { const t = targetFor(hit.object); t?.onSelect?.(hit); }
-          else if (!paused) fireHook(hand, ctrl);
-          hapticPulse(renderer, { hand, intensity: 0.4, duration: 30 });
-        }
-        // grip = grab/move (builder mode), gated while paused
-        const gripDown = hand === 'right' ? s.gripR : s.gripL;
-        if (builderMode && !paused && gripDown && !grabbed && hit) {
-          const t = targetFor(hit.object);
-          if (t?.grabbable) {
-            held[hand] = t.object;
-            ctrl.attach(t.object);
-            hapticPulse(renderer, { hand, intensity: 0.7, duration: 40 });
-          }
-        } else if (grabbed && !gripDown) {
-          scene.attach(grabbed); // drop, preserving world transform
-          held[hand] = null;
-        }
+    if (!renderer.xr.isPresenting) return;      // grabbing (all modes) lives in grab.js/main.js
+    for (const ctrl of controllers) {
+      const { hand, line, reticle } = ctrl.userData;
+      const hit = pickFromController(ctrl);
+      // hover highlight: notify targets as the pointed row changes (menus light up)
+      const hoveredT = hit ? targetFor(hit.object) : null;
+      if (hoveredT !== ctrl.userData.hoveredT) {
+        ctrl.userData.hoveredT?.onHover?.(false);
+        hoveredT?.onHover?.(true);
+        ctrl.userData.hoveredT = hoveredT;
       }
-    } else {
-      // ---- flat/mobile grab: E-hold / right-click-hold → same grab path as VR ----
-      const canGrab = builderMode && !paused;
-      if (canGrab && s.grabFlat && !heldFlat) {
-        raycaster.setFromCamera(new THREE.Vector2(0, 0), camera); // crosshair
-        const objs = targets.map((t) => t.object).filter((o) => o.visible);
-        const hit = raycaster.intersectObjects(objs, true)[0];
-        const t = hit && targetFor(hit.object);
-        if (t?.grabbable) { heldFlat = t.object; camera.attach(heldFlat); } // follow the view
-      } else if (heldFlat && (!s.grabFlat || !canGrab)) {
-        scene.attach(heldFlat); // drop, preserving world transform
-        heldFlat = null;
+      // laser length + reticle
+      if (hit) { line.scale.z = hit.distance; reticle.visible = true; reticle.position.copy(hit.point); }
+      else { line.scale.z = 5; reticle.visible = false; }
+      // trigger = select (menu UI clickable) + fire hook (right-hand gun, gated)
+      const selected = hand === 'right' ? s.selectR : s.selectL;
+      if (selected) {
+        if (hit) { const t = targetFor(hit.object); t?.onSelect?.(hit); }
+        else if (!paused) fireHook(hand, ctrl);
+        hapticPulse(renderer, { hand, intensity: 0.4, duration: 30 });
       }
     }
   }
 
   return {
     update,
-    addTarget(object, onSelect, opts = {}) { targets.push({ object, onSelect, onHover: opts.onHover, grabbable: !!opts.grabbable }); },
+    addTarget(object, onSelect, opts = {}) { targets.push({ object, onSelect, onHover: opts.onHover }); },
     removeTarget(object) { const i = targets.findIndex((t) => t.object === object); if (i >= 0) targets.splice(i, 1); },
     setFireHook(fn) { fireHook = fn || (() => {}); },
-    get builderMode() { return builderMode; },
     setLasersVisible(v) { for (const c of controllers) c.userData.line.visible = v; },
     // the target-ray controller for a hand ('right'/'left') — the laser/pointer space
     getController(hand) { return controllers.find((c) => c.userData.hand === hand && c.userData.connected) || controllers.find((c) => c.userData.hand === hand) || controllers[0]; },

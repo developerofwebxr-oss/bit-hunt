@@ -238,18 +238,6 @@
         backdrop-filter: blur(6px);
       }
 
-      /* builder-mode indicator */
-      #builder-indicator {
-        position: absolute;
-        top: calc(12px + env(safe-area-inset-top));
-        right: calc(12px + env(safe-area-inset-right));
-        padding: 7px 12px;
-        background: var(--panel); border: 1px solid var(--stroke);
-        border-radius: 10px; font-size: 12px;
-        color: var(--green); opacity: 0; transition: opacity 0.2s;
-      }
-      #builder-indicator.show { opacity: 1; }
-
       /* scanner ping flash */
       #scanner-flash {
         position: absolute; inset: 0;
@@ -310,7 +298,6 @@
       <div id="crosshair"></div>
       <div id="hint">hold-drag to look</div>
       <div id="esc-hint">press <b>ESC</b> to release look</div>
-      <div id="builder-indicator">Builder: off</div>
       <div id="scanner-flash"></div>
 
       <!-- mobile-only locomotion controls -->
@@ -318,7 +305,6 @@
       <button id="btn-jump" class="touch-btn">JUMP</button>
       <!-- mobile game-verb buttons (shown only while the verb is enabled) -->
       <div id="verb-buttons">
-        <button id="btn-builder" class="verb-btn">BUILD</button>
         <button id="btn-scanner" class="verb-btn">SCAN</button>
       </div>
 

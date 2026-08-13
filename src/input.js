@@ -9,7 +9,7 @@
 //   axes[2],[3] thumbstick X/Y
 //
 // Everything downstream (locomotion, interaction, pause menu) reads `state`.
-// Edge flags (jump, flyToggle, pause, builder, scanner, selectL/R) are true for
+// Edge flags (jump, flyToggle, pause, scanner, selectL/R) are true for
 // exactly one frame; held flags (move, turn, grips, triggers) reflect now.
 
 import { SPRINT_MAG } from './comfort.js';
@@ -26,7 +26,7 @@ export function createInput({ renderer, canvas }) {
     sprint: false,
     turn: 0,                    // continuous right-stick X (VR only; flat turns via mouse-look)
     // edges (one frame):
-    jump: false, flyToggle: false, pause: false, builder: false, scanner: false,
+    jump: false, flyToggle: false, pause: false, scanner: false,
     selectL: false, selectR: false,
     // held:
     triggerL: false, triggerR: false, gripL: false, gripR: false,
@@ -37,7 +37,7 @@ export function createInput({ renderer, canvas }) {
 
   // ---- buffered one-frame edges from async sources (keyboard / DOM) ----
   // Set by event handlers, drained by pollFlat, cleared at end of update().
-  const edgeBuf = { jump: false, pause: false, builder: false, scanner: false, fly: false };
+  const edgeBuf = { jump: false, pause: false, scanner: false, fly: false };
 
   // ---- keyboard (flat) — bindings follow the cross-input parity table ----
   const keys = new Set();
@@ -52,8 +52,7 @@ export function createInput({ renderer, canvas }) {
     if (e.code === 'Escape' && !document.pointerLockElement
         && !document.getElementById('hunt-overlay')?.classList.contains('show')) edgeBuf.pause = true;
     if (e.code === 'KeyF') edgeBuf.fly = true;     // fly toggle (gated by ENABLE_FLY)
-    if (e.code === 'KeyB') edgeBuf.builder = true; // builder verb
-    if (e.code === 'KeyY') edgeBuf.scanner = true; // game verb (scanner)
+    if (e.code === 'KeyY') edgeBuf.scanner = true; // game verb (scanner) — B is a free slot now
   };
   const up = (e) => keys.delete(e.code);
   window.addEventListener('keydown', down);
@@ -102,14 +101,13 @@ export function createInput({ renderer, canvas }) {
     jumpBtn.addEventListener('touchstart', (e) => { edgeBuf.jump = true; e.preventDefault(); }, { passive: false });
     jumpBtn.addEventListener('click', () => { edgeBuf.jump = true; });
   }
-  // on-screen game-verb buttons (mobile) — parity for B (builder) and Y (scanner)
+  // on-screen game-verb button (mobile) — Y (scanner). Grab is tap-hold on a crate.
   const bindTapBtn = (id, key) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('touchstart', (e) => { edgeBuf[key] = true; e.preventDefault(); }, { passive: false });
     el.addEventListener('click', () => { edgeBuf[key] = true; });
   };
-  bindTapBtn('btn-builder', 'builder');
   bindTapBtn('btn-scanner', 'scanner');
 
   // ---- VR per-hand previous button snapshots (for edges) ----
@@ -126,7 +124,7 @@ export function createInput({ renderer, canvas }) {
     if (!session) return false;
     let sawController = false;
     let mx = 0, my = 0, turn = 0;
-    let jump = false, flyToggle = false, pause = false, builder = false, scanner = false;
+    let jump = false, flyToggle = false, pause = false, scanner = false;
     let selectL = false, selectR = false;
     let gripL = false, gripR = false, triggerL = false, triggerR = false, tvL = 0, tvR = 0;
 
@@ -154,7 +152,7 @@ export function createInput({ renderer, canvas }) {
         if (pressedEdge('right', 0, gp)) selectR = true;
         if (pressedEdge('right', 3, gp)) flyToggle = true; // stick-press → fly
         if (pressedEdge('right', 4, gp)) jump = true;      // A → jump
-        if (pressedEdge('right', 5, gp)) builder = true;   // B → builder stub
+        // B (right button 5) is a free slot now — left grip is the grab verb (handled in main)
       }
     }
     if (!sawController) return false;
@@ -167,7 +165,7 @@ export function createInput({ renderer, canvas }) {
     state.sprint = false;             // VR sprint is sustained full-push (handled in locomotion)
     state.turn = turn;
     state.jump = jump; state.flyToggle = flyToggle; state.pause = pause;
-    state.builder = builder; state.scanner = scanner;
+    state.scanner = scanner;
     state.selectL = selectL; state.selectR = selectR;
     state.gripL = gripL; state.gripR = gripR;
     state.grabFlat = false; // VR grab uses grip per-hand, not the desktop flag
@@ -195,7 +193,6 @@ export function createInput({ renderer, canvas }) {
 
     state.jump = edgeBuf.jump;
     state.pause = edgeBuf.pause;
-    state.builder = edgeBuf.builder;
     state.scanner = edgeBuf.scanner;
     state.flyToggle = edgeBuf.fly;                 // F → fly toggle (gated by ENABLE_FLY)
     state.grabFlat = keys.has('KeyE') || rightMouseDown; // E-hold / right-click-hold
@@ -206,7 +203,7 @@ export function createInput({ renderer, canvas }) {
   function update() {
     const vr = renderer.xr.isPresenting && pollVR();
     if (!vr) pollFlat();
-    edgeBuf.jump = edgeBuf.pause = edgeBuf.builder = edgeBuf.scanner = edgeBuf.fly = false;
+    edgeBuf.jump = edgeBuf.pause = edgeBuf.scanner = edgeBuf.fly = false;
   }
 
   // let DOM controls inject one-frame edges (drained next update)

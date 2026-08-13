@@ -204,6 +204,10 @@ export async function buildLayout(scene) {
   const treadW = topTread(group.getObjectByName('staircase'), catW);
   console.log(`[layout] MEZZx${MEZZ_SCALE} DECK_Y=${DECK_Y.toFixed(2)} deckX[${(catW - catHalfW).toFixed(2)},${(catW + catHalfW).toFixed(2)}] deckZ±${catHalfLen.toFixed(2)} tread=${treadW.maxY.toFixed(2)}@z${treadW.atZ.toFixed(2)} zEndOpen=${zEndOpen} junction=${junctionH?.toFixed(2)}`);
 
+  // AABB collider factory (shared by props + structure below).
+  const box = (x, z, half, top, base = 0) =>
+    ({ minX: x - half, maxX: x + half, minZ: z - half, maxZ: z + half, minY: base, maxY: top });
+
   // ---- Scattered props (hiding spots). Mining rigs + the vault-adjacent crate
   // removed for now (the latter was clipping the vault door). ----
   const crateT = [
@@ -215,7 +219,21 @@ export async function buildLayout(scene) {
   const crateBaked = bake(A.crate.obj);
   crateBaked.geometry.computeBoundingBox();
   const crateH = crateBaked.geometry.boundingBox.max.y - crateBaked.geometry.boundingBox.min.y; // real mesh height (walkable top)
-  group.add(instanced('crates', crateBaked, crateT));
+  const CRATE_HALF = 0.55;
+  // Individual meshes (NOT instanced) so each floor crate can be grabbed & dragged with its
+  // collider. Each grabbable exposes { mesh, box, orig } — the box is the SAME object pushed
+  // into colliders below, so moving it drags collision + walkable top + LOS together.
+  const cratesGroup = new THREE.Group(); cratesGroup.name = 'crates'; group.add(cratesGroup);
+  const crateColliders = [];
+  const grabbables = [];
+  crateT.forEach((t, i) => {
+    const m = new THREE.Mesh(crateBaked.geometry, crateBaked.material);
+    m.name = `crate-${i}`; m.position.set(t.x, t.y || 0, t.z); m.rotation.y = t.ry || 0; m.frustumCulled = true;
+    cratesGroup.add(m);
+    const b = box(t.x, t.z, CRATE_HALF, (t.y || 0) + crateH, t.y || 0); b.walkableTop = true;
+    crateColliders.push(b);
+    if (!t.y) grabbables.push({ mesh: m, box: b, orig: { x: t.x, z: t.z }, half: CRATE_HALF }); // floor crates only
+  });
 
   // Terminals kept clear of the wall-hugging staircases (x ≈ ±6) and pillars.
   const termT = [
@@ -233,18 +251,13 @@ export async function buildLayout(scene) {
   coinObj.name = 'sat-coin-proto';
 
   // ---- Collision data (single source of truth with the placements above) ----
-  // Boxes are XZ AABBs with a vertical [minY,maxY] span; half-extents are the
-  // collidable core (a touch tighter than the visual mesh so you don't bump air).
-  const box = (x, z, half, top, base = 0) =>
-    ({ minX: x - half, maxX: x + half, minZ: z - half, maxZ: z + half, minY: base, maxY: top });
-
+  // Boxes are XZ AABBs with a vertical [minY,maxY] span (half-extents a touch tighter
+  // than the visual mesh so you don't bump air). Crate boxes were built above (so the
+  // grabbables share the exact same objects).
   const colliders = [];
   for (const [x, z] of pPos) colliders.push(box(x, z, 0.6, pillarH));      // pillars (pure blockers)
-  // Low props get a WALKABLE TOP: collider height = the REAL mesh top (raycast-
-  // matched), and walkableTop lets the ground-height system land you on it (jump
-  // onto a crate; from on top, hop again to clear). Sides still block below the top.
-  for (const t of crateT) { const b = box(t.x, t.z, 0.55, (t.y || 0) + crateH, t.y || 0); b.walkableTop = true; colliders.push(b); }
-  for (const t of termT)  { const b = box(t.x, t.z, 0.4, (t.y || 0) + termH, t.y || 0);  b.walkableTop = true; colliders.push(b); }
+  colliders.push(...crateColliders);                                       // crates (walkable tops; floor ones grabbable)
+  for (const t of termT) { const b = box(t.x, t.z, 0.4, (t.y || 0) + termH, t.y || 0); b.walkableTop = true; colliders.push(b); } // terminals
   // (mining rigs removed — no colliders either, so nothing invisible to bump)
 
   // Deck underside collision: each platform footprint is SOLID from floor to
@@ -284,5 +297,5 @@ export async function buildLayout(scene) {
   };
 
   scene.add(group);
-  return { group, colliders, surfaces, ramps, cover, coinObj, DECK_Y, catW, catE, catHalfW, catHalfLen, STAIR_TOP_Z, STAIR_RUN, STAIR_WIDTH };
+  return { group, colliders, surfaces, ramps, cover, coinObj, grabbables, DECK_Y, catW, catE, catHalfW, catHalfLen, STAIR_TOP_Z, STAIR_RUN, STAIR_WIDTH };
 }

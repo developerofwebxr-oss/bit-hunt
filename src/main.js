@@ -19,6 +19,8 @@ import { createVignette } from './vignette.js';
 import { createSats, SAT_COUNT } from './sats.js';
 import { createScanner } from './scanner.js';
 import { createScangun } from './scangun.js';
+import { createLeftHand } from './lefthand.js';
+import { createGrab } from './grab.js';
 import { createHunt } from './hunt.js';
 import { hapticPulse } from './haptics.js';
 import { comfort } from './comfort.js';
@@ -27,6 +29,8 @@ const HUNT_SEED = 1337; // single seed -> swap for a server seed in v4 (multipla
 let sats = null;
 const scanner = createScanner();   // the single scanner-signal seam (real: aim × proximity)
 let scangun = null;
+let leftHand = null;               // VR/AR left-hand glove (the grab hand)
+let grab = null;                   // heavy grab mechanic (drag crates on the floor)
 let hunt = null;
 
 const EYE_HEIGHT = 1.6;
@@ -161,19 +165,28 @@ function updateReturnedHud(n) {
   returnedEl.classList.remove('bump'); void returnedEl.offsetWidth; returnedEl.classList.add('bump');
 }
 
-// ---- gun mounting: right controller in XR, bottom-right viewmodel in flat ----
-function mountGun(mode) {
-  if (!scangun) return;
-  scangun.unmount();
-  if (mode === 'VR' || mode === 'AR') scangun.mountHand(interaction.getGrip('right')); // right controller grip
-  else scangun.mountFlat(camera);
+// ---- hand mounting (gun on the RIGHT grip, glove on the LEFT) ----
+// One robust, connected-driven path serves both viewmodels so there's no duplicated
+// mount logic: mountHandTo(hand, grip) puts the right thing on the right grip, and it's
+// called both on mode change (for already-connected controllers) and on every controller
+// (re)connect — which is what makes each viewmodel follow the real controller even though
+// the session-start mount runs before controllers connect.
+function isXR(mode = currentMode) { return mode === 'VR' || mode === 'AR'; } // hoisted: mountGun runs during modeswitcher init
+function mountHandTo(hand, grip) {
+  if (!grip || !isXR()) return;
+  if (hand === 'right') scangun?.mountHand(grip);
+  else if (hand === 'left') leftHand?.mountHand(grip);
 }
-// Robust hand mount: whenever a controller (re)connects, if it's the right hand and we're
-// in an immersive session, (re)mount the gun to its grip. This is what makes the gun follow
-// the real controller even though the mount at session-start ran before controllers connected.
-interaction.onControllerConnected((hand, grip) => {
-  if (hand === 'right' && scangun && (currentMode === 'VR' || currentMode === 'AR')) scangun.mountHand(grip);
-});
+function mountGun(mode) {                              // (name kept; now mounts both hands)
+  if (isXR(mode)) {
+    scangun?.unmount(); mountHandTo('right', interaction.getGrip('right'));
+    mountHandTo('left', interaction.getGrip('left'));
+  } else {
+    scangun?.mountFlat(camera);                        // flat: gun viewmodel only, no glove
+    leftHand?.unmount();
+  }
+}
+interaction.onControllerConnected((hand, grip) => mountHandTo(hand, grip));
 
 // Control-bar buttons must not keep DOM focus: a focused <button> is activated by
 // Space/Enter, so jumping (Space) would re-fire the last-clicked control — e.g.
@@ -200,12 +213,34 @@ window.addEventListener('keydown', (e) => {
 comfort.onChange((s) => scangun?.setMuted(!s.sound));
 // flat/mobile: click/tap = fire() (muzzle flash + hoop pulse + shoot-to-return),
 // matching the VR trigger. Also unlocks WebAudio on the first gesture.
+// Mobile grab discrimination: a tap that LANDS ON a crate and is HELD grabs it (drag to
+// shove); a quick tap still fires. Desktop keeps instant click-to-shoot (its grab is E /
+// right-click, handled in updateGrab), so this deferral only applies to coarse pointers.
+const mobileGrab = { pending: null, active: false };
+const _rc = new THREE.Raycaster(), _ndc = new THREE.Vector2();
+function grabUnderPointer(e) {
+  if (!grab) return null;
+  const r = canvas.getBoundingClientRect();
+  _ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  _rc.setFromCamera(_ndc, camera);
+  return grab.pickRay(_rc.ray.origin, _rc.ray.direction, 2.5);
+}
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== undefined && e.button !== 0) return;   // primary only
   if (renderer.xr.isPresenting || pauseMenu?.isOpen()) return;
   scangun?.resumeAudio();
+  if (isCoarsePointer()) {
+    const prop = grabUnderPointer(e);
+    if (prop) { mobileGrab.pending = { prop, t0: performance.now() }; return; } // defer: hold→grab, quick tap→shoot
+  }
   scangun?.flash();
   fireShot(null);
+});
+window.addEventListener('pointerup', () => {
+  if (!isCoarsePointer()) return;
+  if (mobileGrab.active) { mobileGrab.active = false; grab?.release(); }
+  else if (mobileGrab.pending) { scangun?.flash(); fireShot(null); } // quick tap on a crate → shoot after all
+  mobileGrab.pending = null;
 });
 
 // ---- build the world ----
@@ -237,13 +272,18 @@ Promise.all([
     sats = createSats({ scene, vaultApi: v, coinObj: layout.coinObj, cover, seed: HUNT_SEED });
     // (exposed via the window.__sat `sats` getter)
 
-    // ---- Scanner gun: held weapon/scanner with live screen + tick effects ----
-    return createScangun({ scene, scanner }).then((g) => {
+    // ---- Heavy grab: drag the vault crates along the floor (colliders move live) ----
+    grab = createGrab({ collision, roomHalf: ROOM.size / 2 - 0.5 });
+    for (const p of layout.grabbables) grab.register(p);
+
+    // ---- Scanner gun + left-hand glove: mounted via one shared connected-driven path ----
+    return Promise.all([createScangun({ scene, scanner }), createLeftHand({ scene })]).then(([g, lh]) => {
       scangun = g;                                 // exposed via window.__sat getter
+      leftHand = lh;                               // VR/AR grab hand (no flat viewmodel)
       g.setMuted(!comfort.get('sound'));           // honor the persisted scanner-sound setting
-      mountGun(currentMode);                       // viewmodel now; re-mounts on XR entry
+      mountGun(currentMode);                       // viewmodels now; re-mount on XR entry / connect
       // ---- Hunt: the 4:20 clock + win/lose flow (owns timer HUD + overlay + start button) ----
-      hunt = createHunt({ sats, vaultApi: v, scangun: g, total: SAT_COUNT, setReturnedHud: updateReturnedHud, renderer, camera, interaction });
+      hunt = createHunt({ sats, vaultApi: v, scangun: g, total: SAT_COUNT, setReturnedHud: updateReturnedHud, renderer, camera, interaction, onReset: () => grab?.resetAll() });
       modeswitcher.setStatus('ready · press Start Hunt (H)');
       reportStats();
     });
@@ -275,6 +315,44 @@ window.visualViewport?.addEventListener('resize', resize);
 window.visualViewport?.addEventListener('scroll', resize);
 resize();
 
+// ---- heavy grab driver (VR left grip / desktop E·right-click / mobile tap-hold) ----
+const _gp = new THREE.Vector3(), _go = new THREE.Vector3(), _gd = new THREE.Vector3();
+const MOBILE_HOLD_MS = 160;
+function floorTarget(origin, dir, maxD) {          // camera ray ∩ floor (y=0), clamped to maxD
+  let d = Math.abs(dir.y) > 1e-4 ? -origin.y / dir.y : maxD;
+  if (!(d > 0)) d = maxD;
+  d = Math.min(d, maxD);
+  return { x: origin.x + dir.x * d, z: origin.z + dir.z * d };
+}
+function updateGrab(dt, paused) {
+  if (!grab) return;
+  if (paused) { if (grab.isHeld()) grab.release(); return; }
+  const s = input.state;
+  if (renderer.xr.isPresenting) {
+    // VR: squeeze the LEFT grip while the glove is near a crate → grab; drag toward the hand.
+    const gripL = interaction.getGrip('left');
+    if (s.gripL && gripL) {
+      gripL.getWorldPosition(_gp);
+      if (!grab.isHeld()) {
+        const p = grab.pickNearest(_gp.x, _gp.z);
+        if (p) { grab.grab(p); hapticPulse(renderer, { hand: 'left', intensity: 0.6, duration: 40 }); }
+      }
+      if (grab.isHeld()) grab.drag(dt, _gp.x, _gp.z);
+    } else if (grab.isHeld()) grab.release();
+    return;
+  }
+  // mobile: promote a held tap to a grab once past the hold threshold
+  if (mobileGrab.pending && !mobileGrab.active && (performance.now() - mobileGrab.pending.t0) > MOBILE_HOLD_MS) {
+    grab.grab(mobileGrab.pending.prop); mobileGrab.active = true;
+  }
+  // desktop (E / right-click) or an active mobile grab: drag toward the looked-at floor point
+  if (s.grabFlat || mobileGrab.active) {
+    camera.getWorldPosition(_go); camera.getWorldDirection(_gd);
+    if (!grab.isHeld()) { const p = grab.pickRay(_go, _gd, 2.5); if (p) grab.grab(p); }
+    if (grab.isHeld()) { const t = floorTarget(_go, _gd, 2.5); grab.drag(dt, t.x, t.z); }
+  } else if (grab.isHeld()) grab.release();
+}
+
 // ---- render loop ----
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
@@ -286,7 +364,8 @@ renderer.setAnimationLoop(() => {
     if (!modeswitcher.isInSession()) controls.update(); // flat mouse-look (turn)
     locomotion.update(dt);                               // move / turn / jump / fly
   }
-  interaction.update();                                  // lasers, select, grip, B/Y
+  interaction.update();                                  // lasers, select, fire hook
+  updateGrab(dt, paused);                                // heavy crate drag (all modes)
   vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
   vaultApi?.updateVault(dt);
   sats?.update(dt, clock.elapsedTime);
@@ -305,6 +384,8 @@ window.__sat = {
   scene, rig, camera, renderer, controls, THREE,
   input, locomotion, collision, comfort, interaction, scanner,
   get scangun() { return scangun; },
+  get grab() { return grab; },
+  get leftHand() { return leftHand; },
   get sats() { return sats; },
   get hunt() { return hunt; },
   get vault() { return vaultApi; },
@@ -318,6 +399,7 @@ window.__sat = {
     const paused = !!pauseMenu?.isOpen();
     if (!paused) { if (!modeswitcher.isInSession()) controls.update(); locomotion.update(dt); }
     interaction.update();
+    updateGrab(dt, paused);
   },
   // full logic+render frame (headless verification when rAF is throttled): mirrors
   // the render loop body so the framebuffer reflects the gun/screen/effects live.

@@ -18,7 +18,7 @@ const URGENCY_AT = 30;             // last-30s urgency (pulse + per-second low t
 // mm:ss
 const fmt = (t) => { const s = Math.max(0, Math.round(t)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
-export function createHunt({ sats, vaultApi, scangun, total = 21, setReturnedHud = () => {}, renderer, camera, interaction }) {
+export function createHunt({ sats, vaultApi, scangun, total = 21, setReturnedHud = () => {}, renderer, camera, interaction, onReset = () => {} }) {
   let state = 'idle';
   let timeLeft = HUNT_DURATION;
   let settle = 0, winElapsed = 0, lastTickSec = -1, sealed = false;
@@ -144,6 +144,7 @@ export function createHunt({ sats, vaultApi, scangun, total = 21, setReturnedHud
   function reset() {
     state = 'idle'; timeLeft = HUNT_DURATION; settle = WIN_SETTLE; winElapsed = 0; sealed = false;
     sats.reset();                 // clears caught + catch flash + portal glow + closes the door
+    onReset();                    // restore any dragged props to their original layout positions
     setReturnedHud(0);
     hideOverlays();
     drawTimer(); setBtn('Start Hunt');
