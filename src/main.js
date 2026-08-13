@@ -14,6 +14,7 @@ import { createCollision } from './collision.js';
 import { createLocomotion } from './locomotion.js';
 import { createInteraction } from './interaction.js';
 import { createEnvironment } from './environment.js';
+import { createArBounds } from './arbounds.js';
 import { createPauseMenu } from './pausemenu.js';
 import { createVignette } from './vignette.js';
 import { createSats, SAT_COUNT } from './sats.js';
@@ -31,6 +32,7 @@ const scanner = createScanner();   // the single scanner-signal seam (real: aim 
 let scangun = null;
 let leftHand = null;               // VR/AR left-hand glove (the grab hand)
 let grab = null;                   // heavy grab mechanic (drag crates on the floor)
+let arBounds = null;               // AR comfort layer (boundary shimmer + ground disc)
 let hunt = null;
 
 const EYE_HEIGHT = 1.6;
@@ -292,8 +294,10 @@ Promise.all([
     for (const s of layout.surfaces) collision.addSurface(s);
     for (const r of layout.ramps) collision.addRamp(r);
     if (v.collider) collision.addBox(v.collider);
-    // environment adapter owns the shell; apply the current mode now
-    environment = createEnvironment({ shell: room.group, collision, half: ROOM.size / 2 });
+    // AR comfort layer (boundary shimmer + ground disc) — AR-only, toggled by the environment
+    arBounds = createArBounds({ scene, half: ROOM.size / 2, wallHeight: ROOM.height, floorY: 0 });
+    // environment adapter owns the shell + AR comfort layer; apply the current mode now
+    environment = createEnvironment({ shell: room.group, collision, half: ROOM.size / 2, arBounds });
     environment.applyMode(currentMode);
 
     // ---- Gameplay Phase 1: vault burst + 21 hidden sats (seeded) ----
@@ -448,6 +452,7 @@ renderer.setAnimationLoop(() => {
     interaction.update();                                  // lasers, select, fire hook (polls controllers)
     if (renderer.xr.isPresenting) { ensureHandMounts(); alignHandsToRay(); } // mount + barrel∥laser
     updateGrab(dt, paused);                                // heavy crate drag (all modes)
+    arBounds?.update(rig.position);                        // AR comfort: shimmer proximity + disc follow
     vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
     vaultApi?.updateVault(dt);
     sats?.update(dt, clock.elapsedTime);
@@ -476,6 +481,8 @@ window.__sat = {
   get scangun() { return scangun; },
   get grab() { return grab; },
   get leftHand() { return leftHand; },
+  get arBounds() { return arBounds; },
+  get environment() { return environment; },
   get sats() { return sats; },
   get hunt() { return hunt; },
   get vault() { return vaultApi; },
@@ -491,6 +498,7 @@ window.__sat = {
     interaction.update();
     if (renderer.xr.isPresenting) { ensureHandMounts(); alignHandsToRay(); }
     updateGrab(dt, paused);
+    arBounds?.update(rig.position);
   },
   // full logic+render frame (headless verification when rAF is throttled): mirrors
   // the render loop body so the framebuffer reflects the gun/screen/effects live.
