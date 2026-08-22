@@ -231,6 +231,15 @@ export async function buildLayout(scene) {
     m.name = `crate-${i}`; m.position.set(t.x, t.y || 0, t.z); m.rotation.y = t.ry || 0; m.frustumCulled = true;
     cratesGroup.add(m);
     const b = box(t.x, t.z, CRATE_HALF, (t.y || 0) + crateH, t.y || 0); b.walkableTop = true;
+    // A crate raised onto the deck sits at the top of the stairs — the natural approach launches
+    // you from a stair step ~0.5 m below the deck. Diagnosed: from that low launch a normal hop
+    // reaches the footprint edge exactly as the feet fall back below the mount threshold, so the
+    // snap never fires (0/10). A value sweep showed the mount only becomes reliable once the
+    // threshold drops to ~0.17 m below the deck base — which necessarily makes this ONE crate a
+    // step-up (walk OR jump on) from the deck. That's the honest trade for "reachable on desktop
+    // like it is in VR": you can still jump onto it, you just no longer HAVE to. Floor crates keep
+    // the global STEP_UP (still need a hop, sides solid) — their feel is unchanged.
+    if (t.y) b.stepUp = crateH + 0.17;
     crateColliders.push(b);
     if (!t.y) grabbables.push({ mesh: m, box: b, orig: { x: t.x, z: t.z }, half: CRATE_HALF }); // floor crates only
   });
@@ -269,6 +278,22 @@ export async function buildLayout(scene) {
     const b = box(catX, 0, catHalfW, DECK_Y, 0);
     b.minZ = DECK_Z - catHalfLen; b.maxZ = DECK_Z + catHalfLen - 0.35; // full footprint, +Z entry edge inset
     colliders.push(b);
+  }
+
+  // ---- Mezzanine rail barriers: a low mini-wall along each deck's OPEN inner (room-facing)
+  // edge, so you can't casually WALK off the deck — but a JUMP clears it (hop the rail to drop
+  // to the floor on purpose, landing under normal gravity). The outer edge + the -Z end sit
+  // against the walls (room-bounds clamp handles those) and the +Z end is the staircase boarding
+  // gap — all left open. NOT walkableTop: at mount height you pass OVER the rail (never stand on
+  // it) and fall past it. Height chosen so walking is blocked (feet DECK_Y < top) yet a normal
+  // hop from the deck (apex ≈ DECK_Y+0.69) clears the top (DECK_Y+RAIL_H, RAIL_H<0.64).
+  const RAIL_H = 0.45, RAIL_T = 0.08;
+  for (const innerX of [catW + catHalfW, catE - catHalfW]) {
+    colliders.push({
+      minX: innerX - RAIL_T, maxX: innerX + RAIL_T,
+      minZ: DECK_Z - catHalfLen, maxZ: DECK_Z + catHalfLen,
+      minY: DECK_Y, maxY: DECK_Y + RAIL_H,
+    });
   }
 
   // Walkable deck surfaces (west + east) at DECK_Y — reachable only via the stairs.

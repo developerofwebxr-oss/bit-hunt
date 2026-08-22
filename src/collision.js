@@ -47,7 +47,7 @@ export function createCollision() {
       // vertical overlap? A walkable-top prop lets you move over its footprint once
       // feet are within STEP_UP of the top (so a hop mounts it); pure blockers use a
       // tight 5 cm margin (only "above" when genuinely standing on top).
-      const topSkip = b.walkableTop ? STEP_UP : 0.05;
+      const topSkip = b.walkableTop ? (b.stepUp ?? STEP_UP) : 0.05;
       if (feetY >= b.maxY - topSkip) continue;         // standing on / mounting the top
       if (feetY + PLAYER_H <= b.minY) continue;        // entirely below
       // nearest point on box to the circle centre
@@ -105,7 +105,7 @@ export function createCollision() {
     for (const b of boxes) {
       if (!b.walkableTop) continue;
       if (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
-      if (currentY >= b.maxY - STEP_UP) g = Math.max(g, b.maxY);
+      if (currentY >= b.maxY - (b.stepUp ?? STEP_UP)) g = Math.max(g, b.maxY);
     }
     return g;
   }

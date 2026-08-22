@@ -261,22 +261,33 @@ function grabUnderPointer(e) {
   _rc.setFromCamera(_ndc, camera);
   return grab.pickRay(_rc.ray.origin, _rc.ray.direction, 2.5);
 }
+// Tap-vs-drag: a shot fires ONLY on pointerup that stayed within TAP_MAX_PX and under
+// TAP_MAX_MS — so click-drag is look-only (no phantom shots), and firing on UP (not down)
+// means a click can't be swallowed by pointer-lock acquisition (the "dead first click").
+// Mobile keeps the grab discrimination: tap-hold on a crate = grab, short tap = shoot, drag = look.
+const TAP_MAX_PX = 5, TAP_MAX_MS = 250;
+let press = null;
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== undefined && e.button !== 0) return;   // primary only
   if (renderer.xr.isPresenting || pauseMenu?.isOpen()) return;
   scangun?.resumeAudio();
+  press = { x: e.clientX, y: e.clientY, t: performance.now(), dist: 0 };
   if (isCoarsePointer()) {
     const prop = grabUnderPointer(e);
-    if (prop) { mobileGrab.pending = { prop, t0: performance.now() }; return; } // defer: hold→grab, quick tap→shoot
+    if (prop) mobileGrab.pending = { prop, t0: performance.now() }; // may become a grab (updateGrab)
   }
-  scangun?.flash();
-  fireShot(null);
 });
-window.addEventListener('pointerup', () => {
-  if (!isCoarsePointer()) return;
-  if (mobileGrab.active) { mobileGrab.active = false; grab?.release(); }
-  else if (mobileGrab.pending) { scangun?.flash(); fireShot(null); } // quick tap on a crate → shoot after all
+window.addEventListener('pointermove', (e) => {
+  if (press) press.dist += Math.hypot(e.movementX || 0, e.movementY || 0); // works locked & unlocked
+});
+window.addEventListener('pointerup', (e) => {
+  const p = press; press = null;
+  if (mobileGrab.active) { mobileGrab.active = false; grab?.release(); mobileGrab.pending = null; return; } // grab end ≠ shot
   mobileGrab.pending = null;
+  if (!p || renderer.xr.isPresenting || pauseMenu?.isOpen()) return;
+  const moved = Math.max(p.dist, Math.hypot((e.clientX ?? p.x) - p.x, (e.clientY ?? p.y) - p.y));
+  const dur = performance.now() - p.t;
+  if (moved < TAP_MAX_PX && dur < TAP_MAX_MS) { scangun?.flash(); fireShot(null); } // tap = shoot; drag = look only
 });
 
 // ---- build the world ----
