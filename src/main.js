@@ -323,7 +323,14 @@ Promise.all([
 
     // ---- Heavy grab: drag the vault crates along the floor (colliders move live) ----
     grab = createGrab({ collision, roomHalf: ROOM.size / 2 - 0.5 });
-    for (const p of layout.grabbables) grab.register(p);
+    for (const p of layout.grabbables) {
+      // Give each grabbable its OWN material clone so we can emissive-highlight it individually
+      // (the crates otherwise share one baked material). Stash the base emissive to restore.
+      p.mesh.material = p.mesh.material.clone();
+      p._baseEmissive = p.mesh.material.emissive.clone();
+      p._baseEmissiveI = p.mesh.material.emissiveIntensity;
+      grab.register(p);
+    }
 
     // ---- Scanner gun + left-hand glove: mounted via one shared connected-driven path ----
     return Promise.all([createScangun({ scene, scanner }), createLeftHand({ scene })]).then(([g, lh]) => {
@@ -367,12 +374,18 @@ resize();
 // ---- heavy grab driver (VR left grip / desktop E·right-click / mobile tap-hold) ----
 const _gp = new THREE.Vector3(), _go = new THREE.Vector3(), _gd = new THREE.Vector3();
 const MOBILE_HOLD_MS = 160;
-function floorTarget(origin, dir, maxD) {          // camera ray ∩ floor (y=0), clamped to maxD
-  let d = Math.abs(dir.y) > 1e-4 ? -origin.y / dir.y : maxD;
-  if (!(d > 0)) d = maxD;
-  d = Math.min(d, maxD);
-  return { x: origin.x + dir.x * d, z: origin.z + dir.z * d };
-}
+const GRAB_MIN = 0.6, GRAB_MAX = 2.5;   // screen-mode reach (m along the horizontal view ray)
+let grabDist = 1.5;                     // current hold distance (desktop scroll-wheel controlled)
+let everGrabbed = false;                // per-session: gates the first-time nudge
+// Desktop: while holding, the scroll wheel pushes/pulls the crate along the view ray — the
+// screen-mode equivalent of the hand deciding depth. Clamped to reach; collision clamp is
+// handled by grab.drag's push-out. (No-op unless actually holding, so normal page scroll is free.)
+window.addEventListener('wheel', (e) => {
+  if (renderer.xr.isPresenting || !grab?.isHeld()) return;
+  grabDist = Math.max(GRAB_MIN, Math.min(GRAB_MAX, grabDist - Math.sign(e.deltaY) * 0.22));
+  e.preventDefault();
+}, { passive: false });
+
 function updateGrab(dt, paused) {
   if (!grab) return;
   if (paused) { if (grab.isHeld()) grab.release(); return; }
@@ -385,26 +398,76 @@ function updateGrab(dt, paused) {
       gripL.getWorldPosition(_gp);
       if (!grab.isHeld()) {
         const p = grab.pickNearest(_gp.x, _gp.z);
-        if (p) { grab.grab(p, _gp.x, _gp.z); hapticPulse(renderer, { hand: 'left', intensity: 0.6, duration: 40 }); }
+        if (p) { grab.grab(p, _gp.x, _gp.z); everGrabbed = true; hapticPulse(renderer, { hand: 'left', intensity: 0.6, duration: 40 }); }
       }
       if (grab.isHeld()) grab.drag(dt, _gp.x, _gp.z);
     } else if (grab.isHeld()) grab.release();
     return;
   }
-  // desktop (E / right-click) or an active mobile grab: the "controller point" is the looked-at
-  // floor point; the crate holds its grabbed offset from it, so it moves in every direction.
+  // desktop (E / right-click) or an active mobile grab. The "controller point" is a point at
+  // grabDist along the HORIZONTAL view ray: look → swings the crate sideways, walk → carries it,
+  // scroll → changes depth. The crate holds its grabbed offset from that point (all directions).
   if (mobileGrab.pending && !mobileGrab.active && (performance.now() - mobileGrab.pending.t0) > MOBILE_HOLD_MS) {
-    mobileGrab.active = true; // the block below grabs pending.prop once we have the floor point
+    mobileGrab.active = true; // the block below grabs pending.prop once we have the target point
   }
   if (s.grabFlat || mobileGrab.active) {
     camera.getWorldPosition(_go); camera.getWorldDirection(_gd);
-    const t = floorTarget(_go, _gd, 2.5);
+    const hl = Math.hypot(_gd.x, _gd.z) || 1;
+    const fx = _gd.x / hl, fz = _gd.z / hl;              // forward projected onto the floor plane
     if (!grab.isHeld()) {
-      const p = mobileGrab.active ? mobileGrab.pending?.prop : grab.pickRay(_go, _gd, 2.5);
-      if (p) grab.grab(p, t.x, t.z);
+      const p = mobileGrab.active ? mobileGrab.pending?.prop : grab.pickRay(_go, _gd, GRAB_MAX);
+      if (p) {
+        const cx = (p.box.minX + p.box.maxX) / 2, cz = (p.box.minZ + p.box.maxZ) / 2;
+        grabDist = Math.max(GRAB_MIN, Math.min(GRAB_MAX, Math.hypot(cx - _go.x, cz - _go.z))); // no jump
+        grab.grab(p, _go.x + fx * grabDist, _go.z + fz * grabDist);
+        everGrabbed = true;
+      }
     }
-    if (grab.isHeld()) grab.drag(dt, t.x, t.z);
+    if (grab.isHeld()) grab.drag(dt, _go.x + fx * grabDist, _go.z + fz * grabDist);
   } else if (grab.isHeld()) grab.release();
+}
+
+// ---- grab affordance (flat/mobile): highlight the reachable/held crate + a crosshair hint ----
+const _ao = new THREE.Vector3(), _ad = new THREE.Vector3();
+const grabHintEl = document.getElementById('grab-hint');
+const crosshairEl = document.getElementById('crosshair');
+let hlProp = null;                       // currently emissive-highlighted prop
+function setHighlight(prop, level) {
+  if (!prop) return;
+  const m = prop.mesh.material;
+  if (level > 0) { m.emissive.setHex(0x19ff9b); m.emissiveIntensity = level; }
+  else { m.emissive.copy(prop._baseEmissive); m.emissiveIntensity = prop._baseEmissiveI; }
+}
+function updateGrabAffordance() {
+  if (!grab) return;
+  const clear = () => {
+    if (hlProp) { setHighlight(hlProp, 0); hlProp = null; }
+    crosshairEl?.classList.remove('grab-ready', 'grabbing');
+    grabHintEl?.classList.remove('show', 'nudge');
+  };
+  if (renderer.xr.isPresenting || pauseMenu?.isOpen()) { clear(); return; }
+  const coarse = isCoarsePointer();
+  const held = grab.held;
+  let target = null, level = 0, state = '';
+  if (held) { target = held; level = 0.18; state = 'grabbing'; }        // held = a touch stronger
+  else {
+    camera.getWorldPosition(_ao); camera.getWorldDirection(_ad);
+    const p = grab.pickRay(_ao, _ad, GRAB_MAX);
+    if (p) { target = p; level = 0.08; state = 'grab-ready'; }           // subtle green tint, not a blob
+  }
+  if (hlProp && hlProp !== target) setHighlight(hlProp, 0);
+  if (target) setHighlight(target, level);
+  hlProp = target;
+  crosshairEl?.classList.toggle('grab-ready', state === 'grab-ready');
+  crosshairEl?.classList.toggle('grabbing', state === 'grabbing');
+  if (state === '') { grabHintEl?.classList.remove('show', 'nudge'); return; }
+  const text = state === 'grabbing' ? 'release to drop' : (coarse ? 'tap & hold to grab' : 'hold E to grab');
+  if (grabHintEl) {
+    if (grabHintEl.textContent !== text) grabHintEl.textContent = text;
+    grabHintEl.classList.add('show');
+    // first-time nudge: pulse the "grab" hint until the player has grabbed once this session
+    grabHintEl.classList.toggle('nudge', state === 'grab-ready' && !everGrabbed);
+  }
 }
 
 // ---- in-VR diagnostic readout: device-side truth the emulated checks can't show ----
@@ -463,6 +526,7 @@ renderer.setAnimationLoop(() => {
     interaction.update();                                  // lasers, select, fire hook (polls controllers)
     if (renderer.xr.isPresenting) { ensureHandMounts(); alignHandsToRay(); } // mount + barrel∥laser
     updateGrab(dt, paused);                                // heavy crate drag (all modes)
+    updateGrabAffordance();                                // flat/mobile: highlight + crosshair hint
     arBounds?.update(rig.position);                        // AR comfort: shimmer proximity + disc follow
     vignette.update(!paused && comfort.get('vignette') && input.state.moveMag > 0.05, dt);
     vaultApi?.updateVault(dt);
@@ -509,6 +573,7 @@ window.__sat = {
     interaction.update();
     if (renderer.xr.isPresenting) { ensureHandMounts(); alignHandsToRay(); }
     updateGrab(dt, paused);
+    updateGrabAffordance();
     arBounds?.update(rig.position);
   },
   // full logic+render frame (headless verification when rAF is throttled): mirrors
